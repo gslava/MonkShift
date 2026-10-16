@@ -1,6 +1,31 @@
 # MonkShift
 
+<img src="Resources/AppIcon.png" width="128" height="128" alt="MonkShift app icon: a ceramic Zen monk on a graphite tile">
+
 A minimal native macOS focus utility built with SwiftUI and AppKit. macOS 14 or later. MIT licensed, fully offline, no dependencies, accounts, analytics, network clients, web views, or resident helper processes.
+
+<p>
+  <img src="docs/images/controls-light.png" width="280" alt="MonkShift controls in light appearance">
+  <img src="docs/images/controls-dark.png" width="280" alt="MonkShift controls in dark appearance">
+</p>
+
+Fixture previews of the real UI, rendered without changing system settings. They
+show layout and example states, not proof of OS effects. [Automation onboarding](docs/images/permission-light.png).
+
+## Install with Homebrew
+
+Once the first matching GitHub release and cask are published:
+
+```sh
+brew tap gslava/monkshift https://github.com/gslava/MonkShift.git
+brew install --cask gslava/monkshift/monkshift
+```
+
+This repository is its own custom tap. The app is ad-hoc signed without an Apple
+Developer ID or notarization; macOS may require per-app approval through System
+Settings → Privacy & Security on first launch. See [distribution and first-launch
+instructions](docs/DISTRIBUTION.md). Homebrew installs the bundle but does not
+launch it or grant Automation permission.
 
 ## Build and open
 
@@ -12,19 +37,24 @@ bash scripts/build-app.sh
 open build/MonkShift.app
 ```
 
-The build produces an ad-hoc signed app for the current Mac's architecture. Move it to `/Applications` **before granting permission** to keep its path stable. To edit in Xcode, open `Package.swift`; use the build script to produce an app bundle with the required privacy metadata. No full Xcode installation is needed for the scripts.
+The build produces an ad-hoc signed **Universal app for Apple Silicon and Intel**. Use `bash scripts/build-app.sh --native` for a faster local-only development build. Move the final app to `/Applications` **before granting permission** to keep its path stable. To edit in Xcode, open `Package.swift`; use the build script to produce an app bundle with the required privacy metadata and generated ICNS. No full Xcode installation is needed for the scripts.
 
-For distribution to other Macs, build/test the required architectures, sign using an Apple Developer identity (`MONKSHIFT_SIGN_IDENTITY`), and notarize separately. The default local build is not notarized and is not a universal binary.
+`bash scripts/package-release.sh` prepares a Universal ZIP, SHA-256 checksum, release metadata and matching Homebrew cask. `bash scripts/verify-release.sh` verifies the extracted bundle without launching it. These commands do not publish anything. See [DISTRIBUTION.md](docs/DISTRIBUTION.md) for the GitHub release and custom-tap workflow. Developer ID, notarization and App Store distribution are outside this project's workflow.
 
 ## Permission and privacy
 
 The first-launch screen explains the permission and displays the open-source/offline labels. Click **Grant Automation Permission**, then allow **System Events** in the macOS prompt. All system controls and global shortcut actions remain gated until this permission is granted. After denial, open System Settings → Privacy & Security → Automation → MonkShift and enable System Events, then click **Check Again**.
 
-Only Automation is requested. Dock/menu-bar scripting uses System Events' preferences dictionary; it does not automate mouse clicks in System Settings. Global shortcuts use Carbon registration, so Accessibility, Screen Recording and Input Monitoring permissions are not requested. Privacy state is checked again before every mutation. Revocation blocks later actions; a restore record remains available once permission is granted again.
+Only Automation is requested. Dock/menu-bar control sends typed Apple Events against System Events' preferences dictionary; it does not automate mouse clicks in System Settings. Requests have a five-second timeout and run on a serial background queue. Preferences and color-filter operations run on a background actor; AppKit wallpaper/UI access stays on the main actor. Global shortcuts use Carbon registration, so Accessibility, Screen Recording and Input Monitoring permissions are not requested. Privacy state is checked again before every mutation. Revocation blocks later actions; a restore record remains available once permission is granted again.
 
 System Events can exit while idle. If a permission check reports that its target is not running, MonkShift starts it in the background and checks again without prompting. The menu updates when the check completes; consent is requested only through the onboarding button.
 
 Rebuilding an ad-hoc signed app can invalidate macOS's stored permission identity. Reopen the final app from its stable location and regrant permission if necessary.
+
+Only one MonkShift process may access a user's saved settings at a time. A file
+lock is acquired before opening the restore journal or installing shortcuts. A
+second launch asks the running instance to show its window and exits. The OS
+releases the lock on exit or a crash; an old PID file alone cannot block startup.
 
 ## Controls and status
 
@@ -43,7 +73,14 @@ The top of the window and menu shows **All enabled**, **Partially enabled**, **O
 | Black wallpaper | An 8 × 8 opaque black PNG generated locally, applied through `NSWorkspace` to each connected display in the current desktop Space. |
 | Grayscale | System display color filter category 1, type 1, through dynamically resolved `MADisplayFilterPref*` APIs and the system Universal Access daemon. |
 
-The grayscale slider is available in the window and under **Grayscale intensity** in the menu bar menu. The menu item shows the current percentage; its submenu updates the percentage while dragging and applies once on release. Both controls share the same value, default to **50%**, and store the preference locally. Use the window slider for keyboard adjustment. Controls are disabled while busy, without permission, or when the filter state is unknown/unavailable. The slider normalizes the native exported minimum/maximum intensity range to 0–100% (on the development Mac, native 0.25–1.0). 0% is the lowest supported filter intensity; switch the checkbox off to remove the filter completely. While grayscale is on, refresh reads its current intensity from macOS and slider changes apply after release. When off, the chosen amount is used on the next enable.
+The grayscale slider is available in the window and **directly below the grayscale checkbox in the menu bar menu**. It shows the current percentage while dragging and applies once on release. Both controls share the same value, default to **50%**, and store the preference locally. The menu slider is disabled when grayscale is off; the window slider can still save a preferred amount for the next enable. Use the window slider for keyboard adjustment. Controls are disabled while applying/reading settings, without permission, or when the filter state is unknown/unavailable. The slider normalizes the native exported minimum/maximum intensity range to 0–100% (on the development Mac, native 0.25–1.0). 0% is the lowest supported filter intensity; switch the checkbox off to remove the filter completely. While grayscale is on, refresh reads its current intensity from macOS and slider changes apply after release.
+
+<p>
+  <img src="docs/images/intensity-menu-light.png" width="280" alt="Native menu intensity slider while grayscale is enabled">
+  <img src="docs/images/intensity-menu-off-dark.png" width="280" alt="Disabled menu intensity slider while grayscale is off">
+</p>
+
+Menu control fixtures, shown separately from the surrounding native menu.
 
 **Compatibility:** Dock and Stage Manager preference keys and the color filter symbols are not stable public configuration APIs. Their actual visual effects require manual checks on each supported macOS version. Checkboxes read system preferences/API state, not screen pixels. A preference read-back confirms the stored value; it cannot prove the corresponding daemon rendered the effect. Missing symbols, failed writes and unknown states are shown explicitly. No SIP changes or administrator privileges are used.
 
@@ -54,6 +91,11 @@ The grayscale slider is available in the window and under **Grayscale intensity*
 **Disable Monk Mode** restores exactly the saved state from immediately before that session, including prior filter type/enabled state/intensity and wallpaper URL/options. Quitting keeps the current system settings and the restore record. Opening MonkShift again lets you disable/restore the saved session.
 
 Individual checkbox changes also save their first baseline. Unchecking restores that feature's saved configuration and ensures the feature is off. **Restore All Changes** restores the Monk session first, then the earlier individual baselines. This means a previously enabled system feature can be restored to enabled. Individual edits during a Monk session do not replace the session baseline.
+
+System operations suspend while awaiting background work. A second mutation is
+rejected until the current operation finishes; reads and UI actions do not
+interleave with a mutation. Snapshots still reach durable storage before the
+first OS change, and a failed finalization retains the relevant restore records.
 
 If restoration fails, the corresponding record stays on disk for retry. For a disconnected display, reconnect it and retry **Restore All Changes**. An unreadable/corrupted restore file blocks modifications rather than replacing the file. A missing file on a first launch is normal.
 
@@ -85,11 +127,17 @@ No fixed RAM claim is made until the release build is measured. To measure, laun
 
 ## Verification
 
-`bash scripts/check.sh` runs 18 core checks against observed-state fixtures, a fake backend and temporary storage: aggregate status including unknown/unavailable settings, write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, and file corruption/version handling. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
+`bash scripts/check.sh` runs 20 core checks against observed-state fixtures, a fake backend and temporary storage: aggregate status including unknown/unavailable settings, write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, file corruption/version handling, suspension/concurrent-operation guards, and failed finalization recovery. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
 
 The same script compiles the app's actual permission manager with a fake client and runs 8 additional checks: idle-target recovery, denied/missing/revoked consent, unavailable targets, launch failures, concurrent refreshes, and explicit request completion. No real services are started or privacy prompts requested by these checks.
 
-`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled, partially enabled, unknown, unavailable, failed-operation and applying states, plus the minimum window size and the icon at native and enlarged sizes. The native intensity submenu view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
+Eight isolated system checks cover cross-process file locking, normal/crash
+release, lock-file errors, typed Apple Event requests, background serialization,
+main-actor responsiveness during a slow fake reply, and unknown/denied/timed-out
+replies. They use temporary files, short-lived test subprocesses and a fake event
+transport; no real Apple Events are sent.
+
+`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation and applying states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
 
 Manual acceptance checks on **both macOS 14 and macOS 15**:
 
@@ -97,8 +145,9 @@ Manual acceptance checks on **both macOS 14 and macOS 15**:
 - After granting permission, close the window and let System Events exit while idle. Open MonkShift's menu: controls should appear after the background check, without another consent prompt. Repeat after restarting MonkShift.
 - Record initial Dock, menu bar, Stage Manager, wallpaper and filter states. Enable each setting and verify its actual visual effect, including Stage Manager grouping with two windows from the same app.
 - Enable Monk Mode; verify all eight settings and the aggregate status at the top of both the window and menu. Disable one setting and confirm **Partially enabled** appears even with a saved session. Disable Monk Mode and compare to the recorded baseline. Unknown/unavailable readings must not produce **All enabled** or a false **Off**.
-- Start with a different color filter enabled. Enable grayscale, adjust its slider, and restore; confirm the original type and intensity are preserved. Repeat the adjustment through the menu bar's **Grayscale intensity** submenu: the percentage should follow dragging, settings should apply on release, and the window should show the same value. With grayscale off, choose a value in the submenu, verify the filter stays off, then enable it and verify the saved amount is used. Check the submenu is disabled during changes and when the filter is unavailable/unknown.
+- Start with a different color filter enabled. Enable grayscale, adjust its slider, and restore; confirm the original type and intensity are preserved. Repeat through the menu bar's direct **Grayscale intensity** control: the percentage should follow dragging, settings should apply on release, and the window should show the same value. With grayscale off, verify the menu slider is disabled; choose a preferred amount in the window, then enable the filter and verify that amount is used. Check both controls are disabled during changes and when the filter is unavailable/unknown.
 - Quit while Monk Mode is active. Reopen and restore the previous state.
+- Launch a second copy while MonkShift is running, including with its window closed: only the existing window should open and no second menu bar item should appear. After terminating the owner, verify a subsequent launch works and saved restoration remains available.
 - Change an individual setting, start Monk Mode, edit another setting, disable Monk Mode, then Restore All; verify baseline ordering.
 - Test wallpaper restoration with multiple displays, a temporarily disconnected display, and separate desktop Spaces. Confirm documented scope.
 - Edit and use all four shortcuts from another app. Try duplicates and a shortcut registered by another app; confirm errors preserve the previous assignment.

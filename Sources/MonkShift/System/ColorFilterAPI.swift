@@ -4,7 +4,7 @@ import Darwin
 
 /// Private symbols are isolated here. No compile-time link to private frameworks.
 final class ColorFilterAPI {
-    struct State: Codable {
+    struct State: Codable, Sendable {
         let enabled: Bool
         let type: Int32
         let intensity: Double

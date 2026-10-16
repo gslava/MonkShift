@@ -7,22 +7,22 @@ import Foundation
     }
 }
 
-@MainActor func expectEqual<T: Equatable>(_ lhs: @autoclosure () throws -> T, _ rhs: @autoclosure () throws -> T,
-    file: String = #filePath, line: UInt = #line) {
+@MainActor func expectEqual<T: Equatable>(_ lhs: @autoclosure () async throws -> T, _ rhs: @autoclosure () async throws -> T,
+    file: String = #filePath, line: UInt = #line) async {
     do {
-        let left = try lhs(), right = try rhs()
+        let left = try await lhs(), right = try await rhs()
         if left != right { CheckResults.fail("Expected \(right), got \(left)", file: file, line: line) }
     } catch { CheckResults.fail("Unexpected error: \(error)", file: file, line: line) }
 }
 
-@MainActor func expectTrue(_ value: @autoclosure () throws -> Bool, file: String = #filePath, line: UInt = #line) {
-    expectEqual(try value(), true, file: file, line: line)
+@MainActor func expectTrue(_ value: @autoclosure () async throws -> Bool, file: String = #filePath, line: UInt = #line) async {
+    await expectEqual(try await value(), true, file: file, line: line)
 }
-@MainActor func expectFalse(_ value: @autoclosure () throws -> Bool, file: String = #filePath, line: UInt = #line) {
-    expectEqual(try value(), false, file: file, line: line)
+@MainActor func expectFalse(_ value: @autoclosure () async throws -> Bool, file: String = #filePath, line: UInt = #line) async {
+    await expectEqual(try await value(), false, file: file, line: line)
 }
-@MainActor func expectThrows<T>(_ operation: @autoclosure () throws -> T, file: String = #filePath, line: UInt = #line) {
-    do { _ = try operation(); CheckResults.fail("Expected an error", file: file, line: line) }
+@MainActor func expectThrows<T>(_ operation: @autoclosure () async throws -> T, file: String = #filePath, line: UInt = #line) async {
+    do { _ = try await operation(); CheckResults.fail("Expected an error", file: file, line: line) }
     catch { /* Expected. */ }
 }
 
@@ -44,6 +44,8 @@ import Foundation
             ("Restore progress persistence failure", suite.testSavingRestoreProgressFailureKeepsRetryableJournal),
             ("File round trip and corruption", suite.testFileStoreRoundTripAndCorruptFilePreservation),
             ("Unknown restore version rejected", suite.testUnknownRestoreVersionIsRejected),
+            ("Concurrent changes blocked during snapshot", suite.testConcurrentMutationIsRejectedWhileSnapshotSuspends),
+            ("Finalization failure retains restore records", suite.testFinalizationFailureKeepsRestoreRecords),
             ("All enabled requires observed settings", summary.testAllEnabledRequiresEveryObservedSetting),
             ("Off requires observed settings", summary.testAllOffRequiresEveryObservedSetting),
             ("Partial status reflects individual settings", summary.testPartialReflectsIndividualSettings),

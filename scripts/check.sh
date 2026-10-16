@@ -11,3 +11,10 @@ swiftc -parse-as-library -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
     Sources/MonkShift/PermissionManager.swift Tests/MonkShiftPermissionTests/PermissionManagerChecks.swift \
     -o .build/checks/MonkShiftPermissionChecks
 .build/checks/MonkShiftPermissionChecks
+MONK_CHECK_BIN_DIR="$(swift build --disable-sandbox --cache-path .build/cache --config-path .build/config --security-path .build/security --show-bin-path)"
+swiftc -parse-as-library -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
+    -I "$MONK_CHECK_BIN_DIR/Modules" "$MONK_CHECK_BIN_DIR/MonkShiftCore.build/"*.o \
+    Sources/MonkShift/System/SingleInstanceLock.swift Sources/MonkShift/System/SystemEventsClient.swift \
+    Tests/MonkShiftSystemTests/*.swift \
+    -o .build/checks/MonkShiftSystemChecks
+.build/checks/MonkShiftSystemChecks

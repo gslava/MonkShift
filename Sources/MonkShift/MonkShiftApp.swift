@@ -6,24 +6,47 @@ import MonkShiftCore
 @main enum MonkShiftApp {
     @MainActor static func main() {
         let application = NSApplication.shared
-        let delegate = AppDelegate()
-        application.delegate = delegate
         application.setActivationPolicy(.accessory)
-        withExtendedLifetime(delegate) { application.run() }
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MonkShift", isDirectory: true)
+        do {
+            switch try SingleInstanceLock.acquire(directory: directory) {
+            case .alreadyRunning(let pid):
+                if let pid { NSRunningApplication(processIdentifier: pid)?.activate(options: []) }
+                DistributedNotificationCenter.default().postNotificationName(AppDelegate.reopenNotification,
+                    object: String(getuid()), userInfo: nil, deliverImmediately: true)
+            case .acquired(let lock):
+                let delegate = AppDelegate(directory: directory)
+                application.delegate = delegate
+                withExtendedLifetime((delegate, lock)) { application.run() }
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "MonkShift could not start safely"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
     }
 }
 #endif
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+    static let reopenNotification = Notification.Name("app.monkshift.MonkShift.reopen")
+    private let directory: URL
     private var model: AppModel!
     private var statusItem: NSStatusItem!
     private var window: NSWindow?
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var reopenObserver: NSObjectProtocol?
+
+    init(directory: URL) { self.directory = directory; super.init() }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MonkShift", isDirectory: true)
         model = AppModel(directory: directory)
+        reopenObserver = DistributedNotificationCenter.default().addObserver(forName: Self.reopenNotification,
+            object: String(getuid()), queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.showWindow(nil) }
+            }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = MonkIcon.menuBarImage()
         statusItem.button?.toolTip = "MonkShift — focus controls"
@@ -54,6 +77,7 @@ import MonkShiftCore
     func applicationWillTerminate(_ notification: Notification) {
         model.shortcuts.shutdown()
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        if let reopenObserver { DistributedNotificationCenter.default().removeObserver(reopenObserver) }
     }
 
     private func refreshIfVisible() { if window?.isVisible == true { model.refresh() } }
@@ -115,7 +139,7 @@ import MonkShiftCore
                 row.isEnabled = model.canChange && state?.available == true && state?.enabled != nil
                 row.toolTip = model.issue(for: feature) ?? state?.detail
                 menu.addItem(row)
-                if feature == .grayscale { addIntensitySubmenu(to: menu) }
+                if feature == .grayscale { addIntensityControl(to: menu) }
             }
             menu.addItem(.separator())
             if model.hasSession || model.hasIndividualChanges {
@@ -139,29 +163,22 @@ import MonkShiftCore
         menu.autoenablesItems = false
     }
 
-    private func addIntensitySubmenu(to menu: NSMenu) {
+    private func addIntensityControl(to menu: NSMenu) {
         let percentage = Int((model.intensity * 100).rounded())
-        let parent = NSMenuItem(title: "Grayscale intensity · \(percentage)%", action: nil, keyEquivalent: "")
-        parent.isEnabled = model.canAdjustIntensity
-        let submenu = NSMenu(title: "Grayscale intensity")
-        submenu.autoenablesItems = false
-        let control = NSMenuItem(title: "Grayscale intensity", action: nil, keyEquivalent: "")
-        control.isEnabled = model.canAdjustIntensity
-        control.view = GrayscaleIntensityMenuView(intensity: model.intensity, enabled: model.canAdjustIntensity,
+        let control = NSMenuItem(title: "Grayscale intensity · \(percentage)%", action: nil, keyEquivalent: "")
+        control.isEnabled = model.canAdjustMenuIntensity
+        control.view = GrayscaleIntensityMenuView(intensity: model.intensity, enabled: model.canAdjustMenuIntensity,
             filterEnabled: model.states[.grayscale]?.enabled == true,
             onEditingChanged: { [weak model] editing in model?.isEditingIntensity = editing },
             onCommit: { [weak self, weak menu] intensity in
                 guard let self else { return }
-                if self.model.canAdjustIntensity {
+                if self.model.canAdjustMenuIntensity {
                     self.model.intensity = intensity
                     self.model.commitIntensity()
                 }
-                // Saving a value while grayscale is off does not start an OS refresh.
                 if let menu { self.populateMenu(menu) }
             })
-        submenu.addItem(control)
-        parent.submenu = submenu
-        menu.addItem(parent)
+        menu.addItem(control)
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {

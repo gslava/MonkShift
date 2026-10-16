@@ -37,10 +37,11 @@ import MonkShiftCore
         }
     }
 
-    var canChange: Bool { permissions.granted && !permissions.checking && !busy && engine != nil }
+    var canChange: Bool { permissions.granted && !permissions.checking && !busy && !refreshing && engine != nil }
     var canAdjustIntensity: Bool {
         canChange && states[.grayscale]?.available == true && states[.grayscale]?.enabled != nil
     }
+    var canAdjustMenuIntensity: Bool { canAdjustIntensity && states[.grayscale]?.enabled == true }
 
     var summary: FeatureSummary { FeatureSummary(states: states) }
     var statusTitle: String {
@@ -60,7 +61,7 @@ import MonkShiftCore
     }
 
     func refresh() {
-        guard !refreshing, !busy else { return }
+        guard !refreshing, !busy, !isEditingIntensity else { return }
         refreshing = true
         onRefresh?()
         Task { @MainActor in
@@ -70,13 +71,13 @@ import MonkShiftCore
             shortcuts.activate()
             var current: [Feature: FeatureState] = [:]
             for feature in Feature.allCases {
-                do { current[feature] = try backend.read(feature) }
+                do { current[feature] = try await backend.read(feature) }
                 catch { current[feature] = FeatureState(enabled: nil, detail: error.localizedDescription, available: false) }
             }
             states = current
             if current[.grayscale]?.enabled == true, !isEditingIntensity,
-               let api = try? backend.colorFilter.get() {
-                intensity = api.normalizedIntensity()
+               let currentIntensity = try? await backend.intensity() {
+                intensity = currentIntensity
             }
             updateJournalState()
         }
@@ -87,14 +88,14 @@ import MonkShiftCore
         hasIndividualChanges = engine?.hasIndividualChanges ?? false
     }
 
-    private func perform(_ operation: @escaping (SettingsEngine) throws -> [OperationIssue]) {
+    private func perform(_ operation: @escaping @MainActor (SettingsEngine) async throws -> [OperationIssue]) {
         // Every entry point, including shortcuts and menu actions, rechecks permissions.
-        guard !busy, let engine else { return }
+        guard !busy, !refreshing, let engine else { return }
         busy = true
         generalError = storageError
         issues = []
         onRefresh?()
-        // Yield one frame so native controls show progress before synchronous system APIs run.
+        // Publish progress before starting the asynchronous system operation.
         Task { @MainActor in
             await Task.yield()
             guard await self.permissions.refresh() else {
@@ -103,9 +104,9 @@ import MonkShiftCore
                 self.refresh()
                 return
             }
-            do { self.issues = try operation(engine) }
+            do { self.issues = try await operation(engine) }
             catch { self.generalError = error.localizedDescription }
-            do { try engine.finishChanges() }
+            do { try await engine.finishChanges() }
             catch { self.generalError = error.localizedDescription }
             self.busy = false
             self.updateJournalState()
@@ -118,23 +119,24 @@ import MonkShiftCore
 
     func toggle(_ feature: Feature) {
         perform { engine in
-            let state = try self.backend.read(feature)
+            let state = try await self.backend.read(feature)
             guard state.available, let enabled = state.enabled else { return [] }
-            do { try engine.set(feature, enabled: !enabled, intensity: self.intensity); return [] }
+            do { try await engine.set(feature, enabled: !enabled, intensity: self.intensity); return [] }
             catch { return [OperationIssue(feature, error)] }
         }
     }
 
     func set(_ feature: Feature, enabled: Bool) {
         perform { engine in
-            do { try engine.set(feature, enabled: enabled, intensity: self.intensity); return [] }
+            do { try await engine.set(feature, enabled: enabled, intensity: self.intensity); return [] }
             catch { return [OperationIssue(feature, error)] }
         }
     }
 
     func toggleMonk() {
         perform { engine in
-            engine.hasMonkSession ? engine.restoreMonk() : try engine.enableMonk(intensity: self.intensity)
+            if engine.hasMonkSession { return try await engine.restoreMonk() }
+            return try await engine.enableMonk(intensity: self.intensity)
         }
     }
 
@@ -145,9 +147,9 @@ import MonkShiftCore
 
     func restoreAll() {
         perform { engine in
-            var issues = engine.restoreMonk()
+            var issues = try await engine.restoreMonk()
             // Preserve ordering: individual settings may predate the Monk session.
-            if !engine.hasMonkSession { issues += engine.restoreIndividual() }
+            if !engine.hasMonkSession { issues += try await engine.restoreIndividual() }
             return issues
         }
     }
@@ -157,7 +159,7 @@ import MonkShiftCore
 
 #if MONKSHIFT_PREVIEW
     enum PreviewState: String, CaseIterable {
-        case off, allEnabled, partiallyEnabled, unknown, unavailable, failed, applying
+        case off, allEnabled, monkSession, partiallyEnabled, unknown, unavailable, failed, applying
     }
 
     static func preview(directory: URL, state: PreviewState = .off) -> AppModel {
@@ -171,9 +173,10 @@ import MonkShiftCore
         model.states[.blackWallpaper]?.detail = "Connected displays in the current desktop Space."
         switch state {
         case .off: break
-        case .allEnabled, .unavailable, .failed:
+        case .allEnabled, .monkSession, .unavailable, .failed:
             for feature in Feature.allCases { model.states[feature]?.enabled = true }
             // An all-enabled state does not require a saved Monk Mode session.
+            if state == .monkSession { model.hasSession = true }
             if state == .unavailable {
                 model.states[.stageManager] = FeatureState(enabled: nil,
                     detail: "Enable “Displays have separate Spaces” in System Settings, then log out and back in.", available: false)

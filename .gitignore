@@ -46,6 +46,7 @@ xcuserdata/
 # Local implementation and verification notes
 /PLANS.MD
 /VERIFICATION.md
+/AGENTS.md
 
 # Logs, caches, temporary files, and editor backups
 /.cache/

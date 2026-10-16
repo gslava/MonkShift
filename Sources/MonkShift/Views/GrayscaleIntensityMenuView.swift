@@ -23,7 +23,8 @@ import AppKit
         addSubview(percentage)
 
         slider.isContinuous = true
-        slider.isEnabled = enabled
+        let canEdit = enabled && filterEnabled
+        slider.isEnabled = canEdit
         slider.target = self
         slider.action = #selector(valueChanged(_:))
         slider.onEditingChanged = onEditingChanged
@@ -32,7 +33,7 @@ import AppKit
         slider.toolTip = "0% is the lowest supported intensity. Turn grayscale off to remove the filter."
         addSubview(slider)
 
-        let hint = NSTextField(labelWithString: filterEnabled ? "Applied when you release the slider." : "Saved for the next time grayscale is enabled.")
+        let hint = NSTextField(labelWithString: filterEnabled ? "Applied when you release the slider." : "Enable grayscale to adjust intensity.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         addSubview(hint)
@@ -54,7 +55,7 @@ import AppKit
             hint.topAnchor.constraint(equalTo: slider.bottomAnchor, constant: 4),
             hint.heightAnchor.constraint(equalToConstant: 16)
         ])
-        if !enabled {
+        if !canEdit {
             title.textColor = .disabledControlTextColor
             percentage.textColor = .disabledControlTextColor
         }

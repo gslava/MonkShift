@@ -1,6 +1,6 @@
 import Foundation
 
-public enum Feature: String, CaseIterable, Codable, Identifiable {
+public enum Feature: String, CaseIterable, Codable, Identifiable, Sendable {
     case instantDock, hideDock, hideMenuBar
     case stageManager, hideRecentApps, oneWindowAtATime, blackWallpaper, grayscale
 
@@ -19,7 +19,7 @@ public enum Feature: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-public struct FeatureState {
+public struct FeatureState: Sendable {
     /// nil means unknown or unavailable, never an inferred success.
     public var enabled: Bool?
     public var detail: String?
@@ -31,7 +31,7 @@ public struct FeatureState {
     }
 }
 
-public struct OperationIssue: Identifiable {
+public struct OperationIssue: Identifiable, Sendable {
     public var id: String { feature.rawValue }
     public let feature: Feature
     public let message: String
@@ -41,17 +41,17 @@ public struct OperationIssue: Identifiable {
     }
 }
 
-public struct MonkError: LocalizedError {
+public struct MonkError: LocalizedError, Sendable {
     public let message: String
     public init(_ message: String) { self.message = message }
     public var errorDescription: String? { message }
 }
 
 @MainActor public protocol SettingsBackend: AnyObject {
-    func read(_ feature: Feature) throws -> FeatureState
-    func snapshot(_ feature: Feature) throws -> Data
-    func apply(_ feature: Feature, intensity: Double) throws
-    func disable(_ feature: Feature) throws
-    func restore(_ feature: Feature, from data: Data) throws
-    func finishChanges() throws
+    func read(_ feature: Feature) async throws -> FeatureState
+    func snapshot(_ feature: Feature) async throws -> Data
+    func apply(_ feature: Feature, intensity: Double) async throws
+    func disable(_ feature: Feature) async throws
+    func restore(_ feature: Feature, from data: Data) async throws
+    func finishChanges() async throws
 }

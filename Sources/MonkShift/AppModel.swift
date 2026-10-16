@@ -15,7 +15,7 @@ import MonkShiftCore
     var onRefresh: (() -> Void)?
     private let backend: MacSettingsBackend
     private var engine: SettingsEngine?
-    private(set) var refreshing = false
+    @Published private(set) var refreshing = false
     private var storageError: String?
 
     init(directory: URL) {
@@ -38,10 +38,31 @@ import MonkShiftCore
     }
 
     var canChange: Bool { permissions.granted && !permissions.checking && !busy && engine != nil }
+    var canAdjustIntensity: Bool {
+        canChange && states[.grayscale]?.available == true && states[.grayscale]?.enabled != nil
+    }
+
+    var summary: FeatureSummary { FeatureSummary(states: states) }
+    var statusTitle: String {
+        if busy { return "Applying settings…" }
+        if refreshing || permissions.checking { return "Checking settings…" }
+        if !permissions.granted { return "Permission required" }
+        return summary.title
+    }
+    var statusDetail: String {
+        if busy { return "The current operation is still in progress." }
+        if refreshing || permissions.checking { return "Reading current macOS settings." }
+        if !permissions.granted { return "Allow Automation to read the current settings." }
+        return summary.detail
+    }
+    var statusNeedsAttention: Bool {
+        generalError != nil || !issues.isEmpty
+    }
 
     func refresh() {
         guard !refreshing, !busy else { return }
         refreshing = true
+        onRefresh?()
         Task { @MainActor in
             defer { refreshing = false; onRefresh?() }
             guard await permissions.refresh() else { shortcuts.deactivate(); states.removeAll(); return }
@@ -72,6 +93,7 @@ import MonkShiftCore
         busy = true
         generalError = storageError
         issues = []
+        onRefresh?()
         // Yield one frame so native controls show progress before synchronous system APIs run.
         Task { @MainActor in
             await Task.yield()
@@ -134,17 +156,41 @@ import MonkShiftCore
     func showWallpaperSettings() { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!) }
 
 #if MONKSHIFT_PREVIEW
-    static func preview(directory: URL) -> AppModel {
+    enum PreviewState: String, CaseIterable {
+        case off, allEnabled, partiallyEnabled, unknown, unavailable, failed, applying
+    }
+
+    static func preview(directory: URL, state: PreviewState = .off) -> AppModel {
         let model = AppModel(directory: directory)
         model.permissions.grantForPreview()
         for feature in Feature.allCases {
             model.states[feature] = FeatureState(enabled: false)
         }
-        model.states[.instantMenuBar] = FeatureState(enabled: nil,
-            detail: "Unavailable: macOS has no verified system-wide control for this animation. Monk Mode applies the other settings.", available: false)
         model.states[.hideRecentApps]?.detail = "Takes effect while Stage Manager is on."
         model.states[.oneWindowAtATime]?.detail = "Takes effect while Stage Manager is on."
         model.states[.blackWallpaper]?.detail = "Connected displays in the current desktop Space."
+        switch state {
+        case .off: break
+        case .allEnabled, .unavailable, .failed:
+            for feature in Feature.allCases { model.states[feature]?.enabled = true }
+            // An all-enabled state does not require a saved Monk Mode session.
+            if state == .unavailable {
+                model.states[.stageManager] = FeatureState(enabled: nil,
+                    detail: "Enable “Displays have separate Spaces” in System Settings, then log out and back in.", available: false)
+            }
+            if state == .failed {
+                model.generalError = "Could not save restoration progress. The saved settings are retained for retry."
+                model.hasSession = true
+            }
+        case .partiallyEnabled:
+            model.states[.hideDock]?.enabled = true
+            model.states[.grayscale]?.enabled = true
+            model.hasSession = true
+        case .unknown:
+            model.states[.grayscale] = FeatureState(enabled: nil, detail: "Could not read the current color filter state.")
+        case .applying:
+            model.busy = true
+        }
         return model
     }
 #endif

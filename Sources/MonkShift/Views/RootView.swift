@@ -68,10 +68,10 @@ struct ControlsView: View {
                         Text("Focus controls for your Mac.").foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if model.busy { ProgressView().controlSize(.small).accessibilityLabel("Applying settings") }
                     Button("Refresh", systemImage: "arrow.clockwise") { model.refresh() }
                         .labelStyle(.iconOnly).help("Read current macOS settings").disabled(model.busy)
                 }
+                SettingsStatusView(model: model)
                 Button { model.toggleMonk() } label: {
                     HStack {
                         Image(systemName: model.hasSession ? "arrow.uturn.backward" : "circle.lefthalf.filled")
@@ -91,10 +91,7 @@ struct ControlsView: View {
                     if let error = model.generalError {
                         Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).textSelection(.enabled)
                     }
-                    if !model.issues.isEmpty {
-                        Text("Some settings need attention. See the messages below.").font(.callout).foregroundStyle(.secondary)
-                    }
-                    group("Dock & Menu Bar", features: [.instantDock, .hideDock, .hideMenuBar, .instantMenuBar])
+                    group("Dock & Menu Bar", features: [.instantDock, .hideDock, .hideMenuBar])
                     group("Stage Manager", features: [.stageManager, .hideRecentApps, .oneWindowAtATime])
                     group("Display", features: [.blackWallpaper, .grayscale])
                     VStack(alignment: .leading, spacing: 8) {
@@ -110,7 +107,7 @@ struct ControlsView: View {
                         }
                         .accessibilityLabel("Grayscale intensity")
                         .accessibilityValue("\(Int((model.intensity * 100).rounded())) percent")
-                        .disabled(!model.canChange || model.states[.grayscale]?.available != true)
+                        .disabled(!model.canAdjustIntensity)
                         Text("Applied when you release the slider. 50% by default.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
@@ -119,7 +116,6 @@ struct ControlsView: View {
             }
             Divider()
             HStack(spacing: 12) {
-                Label("Offline · Open source", systemImage: "lock.shield").font(.callout).foregroundStyle(.secondary)
                 Spacer()
                 Button("Shortcuts…") { showShortcuts = true }.disabled(!model.canChange)
                 Button("Restore All Changes") { model.restoreAll() }

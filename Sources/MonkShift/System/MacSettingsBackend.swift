@@ -7,7 +7,6 @@ import MonkShiftCore
     private var dockNeedsReload = false
     private let dock = "com.apple.dock"
     private let windowManager = "com.apple.WindowManager"
-    private let instantMenuMessage = "Unavailable: macOS has no verified system-wide control for this animation. Monk Mode applies the other settings."
 
     init(directory: URL) {
         wallpaper = WallpaperService(directory: directory)
@@ -45,8 +44,6 @@ import MonkShiftCore
             return FeatureState(enabled: try SystemScript.run("get autohide of dock preferences").booleanValue)
         case .hideMenuBar:
             return FeatureState(enabled: try SystemScript.run("get autohide menu bar of dock preferences").booleanValue)
-        case .instantMenuBar:
-            return FeatureState(enabled: nil, detail: instantMenuMessage, available: false)
         case .stageManager:
             let ready = (value(dock, "workspaces-spans-displays") as? NSNumber)?.boolValue != true
             return FeatureState(enabled: (value(windowManager, "GloballyEnabled") as? NSNumber)?.boolValue ?? false,
@@ -76,7 +73,7 @@ import MonkShiftCore
         case .hideDock, .hideMenuBar: return try JSONEncoder().encode(try read(feature).enabled!)
         case .blackWallpaper: return try wallpaper.snapshot()
         case .grayscale: return try JSONEncoder().encode(colorFilter.get().read())
-        default: throw MonkError(instantMenuMessage)
+        default: throw MonkError("Could not capture preference keys for \(feature.title).")
         }
     }
 
@@ -87,7 +84,6 @@ import MonkShiftCore
             try write(dock, "autohide-time-modifier", 0.0)
         case .hideDock: _ = try SystemScript.run("set autohide of dock preferences to true")
         case .hideMenuBar: _ = try SystemScript.run("set autohide menu bar of dock preferences to true")
-        case .instantMenuBar: throw MonkError(instantMenuMessage)
         case .stageManager:
             guard try read(feature).available else { throw MonkError("Stage Manager requires “Displays have separate Spaces”.") }
             try write(windowManager, "GloballyEnabled", true)
@@ -111,7 +107,6 @@ import MonkShiftCore
         case .oneWindowAtATime: try write(windowManager, "AppWindowGroupingBehavior", 0)
         case .grayscale: try colorFilter.get().disable()
         case .blackWallpaper: throw MonkError("There is no saved wallpaper to restore. Choose a wallpaper in System Settings.")
-        case .instantMenuBar: throw MonkError(instantMenuMessage)
         }
         guard try read(feature).enabled == false else { throw MonkError("macOS did not disable this setting.") }
     }
@@ -137,7 +132,7 @@ import MonkShiftCore
             guard try read(feature).enabled == enabled else { throw MonkError("macOS did not restore \(feature.title).") }
         case .blackWallpaper: try wallpaper.restore(data)
         case .grayscale: try colorFilter.get().restore(JSONDecoder().decode(ColorFilterAPI.State.self, from: data))
-        default: throw MonkError(instantMenuMessage)
+        default: throw MonkError("Could not restore preference keys for \(feature.title).")
         }
     }
 

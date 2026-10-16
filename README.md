@@ -30,19 +30,20 @@ Rebuilding an ad-hoc signed app can invalidate macOS's stored permission identit
 
 Every setting has a checkbox in the window and in the native menu bar menu. Status is refreshed when opening the menu/window, returning to MonkShift, changing the desktop Space while the window is visible, waking the Mac, and after applying settings. Use **Refresh** for changes made elsewhere. No repeating background polling is used.
 
+The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of eight. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. Applying/checking states and operation errors are shown separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
+
 | Setting | Implementation and scope |
 | --- | --- |
 | Instant Dock | `com.apple.dock` → `autohide-delay = 0`, `autohide-time-modifier = 0`; Dock reloads after applying the group. |
 | Hide Dock | System Events → `autohide of dock preferences`. Auto-hides; reveal by moving to its screen edge. |
 | Hide menu bar | System Events → `autohide menu bar of dock preferences`. Auto-hides; reveal by moving to the top edge. |
-| Instant menu bar | **Unavailable in this version.** No verified system-wide timing implementation was found. The disabled checkbox explains this. Monk Mode applies the other supported settings and reports this limitation. |
 | Stage Manager | `com.apple.WindowManager` → `GloballyEnabled`. Requires “Displays have separate Spaces”; if disabled, MonkShift explains the prerequisite. |
 | Hide recent apps | `com.apple.WindowManager` → `AutoHide = true`. Only affects Stage Manager while it is enabled. |
 | One window at a time | `com.apple.WindowManager` → `AppWindowGroupingBehavior = 1`. Only affects Stage Manager. |
 | Black wallpaper | An 8 × 8 opaque black PNG generated locally, applied through `NSWorkspace` to each connected display in the current desktop Space. |
 | Grayscale | System display color filter category 1, type 1, through dynamically resolved `MADisplayFilterPref*` APIs and the system Universal Access daemon. |
 
-The grayscale slider defaults to **50%**, is stored locally, and writes only when editing ends. It normalizes the native exported minimum/maximum intensity range to 0–100% (on the development Mac, native 0.25–1.0). 0% is the lowest supported filter intensity; switch the checkbox off to remove the filter completely. While grayscale is on, refresh reads its current intensity from macOS and slider changes apply after release. When off, the chosen amount is used on the next enable.
+The grayscale slider is available in the window and under **Grayscale intensity** in the menu bar menu. The menu item shows the current percentage; its submenu updates the percentage while dragging and applies once on release. Both controls share the same value, default to **50%**, and store the preference locally. Use the window slider for keyboard adjustment. Controls are disabled while busy, without permission, or when the filter state is unknown/unavailable. The slider normalizes the native exported minimum/maximum intensity range to 0–100% (on the development Mac, native 0.25–1.0). 0% is the lowest supported filter intensity; switch the checkbox off to remove the filter completely. While grayscale is on, refresh reads its current intensity from macOS and slider changes apply after release. When off, the chosen amount is used on the next enable.
 
 **Compatibility:** Dock and Stage Manager preference keys and the color filter symbols are not stable public configuration APIs. Their actual visual effects require manual checks on each supported macOS version. Checkboxes read system preferences/API state, not screen pixels. A preference read-back confirms the stored value; it cannot prove the corresponding daemon rendered the effect. Missing symbols, failed writes and unknown states are shown explicitly. No SIP changes or administrator privileges are used.
 
@@ -84,19 +85,19 @@ No fixed RAM claim is made until the release build is measured. To measure, laun
 
 ## Verification
 
-`bash scripts/check.sh` runs 13 tests against a fake backend and temporary storage: write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, and file corruption/version handling. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
+`bash scripts/check.sh` runs 18 core checks against observed-state fixtures, a fake backend and temporary storage: aggregate status including unknown/unavailable settings, write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, and file corruption/version handling. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
 
 The same script compiles the app's actual permission manager with a fake client and runs 8 additional checks: idle-target recovery, denied/missing/revoked consent, unavailable targets, launch failures, concurrent refreshes, and explicit request completion. No real services are started or privacy prompts requested by these checks.
 
-`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
+`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled, partially enabled, unknown, unavailable, failed-operation and applying states, plus the minimum window size and the icon at native and enlarged sizes. The native intensity submenu view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
 
 Manual acceptance checks on **both macOS 14 and macOS 15**:
 
 - Deny the permission: controls and shortcuts remain locked. Grant it: controls unlock. Revoke it: future actions are blocked.
 - After granting permission, close the window and let System Events exit while idle. Open MonkShift's menu: controls should appear after the background check, without another consent prompt. Repeat after restarting MonkShift.
 - Record initial Dock, menu bar, Stage Manager, wallpaper and filter states. Enable each setting and verify its actual visual effect, including Stage Manager grouping with two windows from the same app.
-- Enable Monk Mode; verify the supported features and the explicit unavailable menu bar timing message. Disable it and compare to the recorded baseline.
-- Start with a different color filter enabled. Enable grayscale, adjust its slider, and restore; confirm the original type and intensity are preserved.
+- Enable Monk Mode; verify all eight settings and the aggregate status at the top of both the window and menu. Disable one setting and confirm **Partially enabled** appears even with a saved session. Disable Monk Mode and compare to the recorded baseline. Unknown/unavailable readings must not produce **All enabled** or a false **Off**.
+- Start with a different color filter enabled. Enable grayscale, adjust its slider, and restore; confirm the original type and intensity are preserved. Repeat the adjustment through the menu bar's **Grayscale intensity** submenu: the percentage should follow dragging, settings should apply on release, and the window should show the same value. With grayscale off, choose a value in the submenu, verify the filter stays off, then enable it and verify the saved amount is used. Check the submenu is disabled during changes and when the filter is unavailable/unknown.
 - Quit while Monk Mode is active. Reopen and restore the previous state.
 - Change an individual setting, start Monk Mode, edit another setting, disable Monk Mode, then Restore All; verify baseline ordering.
 - Test wallpaper restoration with multiple displays, a temporarily disconnected display, and separate desktop Spaces. Confirm documented scope.
@@ -111,5 +112,6 @@ The build scripts do not launch MonkShift or change system settings. Real permis
 - [Apple: Stage Manager behavior and prerequisites](https://support.apple.com/en-ie/guide/mac-help/mchl534ba392/mac).
 - [Apple: Automation permission API](https://developer.apple.com/documentation/coreservices/3025784-aedeterminepermissiontoautomate).
 - [Apple: display color filters](https://support.apple.com/en-ie/guide/mac-help/mchl11ddd4b3/mac).
+- [Apple: custom views in menu items](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/MenuList/Articles/ViewsInMenuItems.html).
 - API signatures/category/type and notification behavior were cross-checked against [brettferdosi/grayscale's API notes](https://github.com/brettferdosi/grayscale/blob/master/Sources/Bridge.h), system SDK exports and read-only runtime probes. No third-party runtime code is linked.
 - [Hexnode's Stage Manager configuration reference](https://www.hexnode.com/mobile-device-management/help/script-to-enable-disable-stage-manager-on-mac/) describes its configuration scripts and grouping values.

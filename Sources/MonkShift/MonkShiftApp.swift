@@ -25,7 +25,7 @@ import MonkShiftCore
             .appendingPathComponent("MonkShift", isDirectory: true)
         model = AppModel(directory: directory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "circle.lefthalf.filled", accessibilityDescription: "MonkShift")
+        statusItem.button?.image = MonkIcon.menuBarImage()
         statusItem.button?.toolTip = "MonkShift — focus controls"
         let menu = NSMenu()
         menu.delegate = self
@@ -89,10 +89,19 @@ import MonkShiftCore
     }
 
     private func populateMenu(_ menu: NSMenu) {
+        // An asynchronous refresh must not detach a slider while it is tracking.
+        guard !model.isEditingIntensity else { return }
         menu.removeAllItems()
-        let heading = NSMenuItem(title: "MonkShift", action: nil, keyEquivalent: "")
+        let heading = NSMenuItem(title: "MonkShift · \(model.statusTitle)", action: nil, keyEquivalent: "")
         heading.isEnabled = false
         menu.addItem(heading)
+        let detail = NSMenuItem(title: model.statusDetail, action: nil, keyEquivalent: "")
+        detail.isEnabled = false
+        menu.addItem(detail)
+        statusItem.button?.toolTip = "MonkShift · \(model.statusTitle)\n\(model.statusDetail)"
+        if model.statusNeedsAttention {
+            menu.addItem(item("Settings need attention…", #selector(showWindow(_:))))
+        }
         menu.addItem(.separator())
         if model.permissions.granted {
             let monk = item(model.hasSession ? "Disable Monk Mode — Restore Previous" : "Monk Mode (Enable All)", #selector(toggleMonk))
@@ -106,15 +115,13 @@ import MonkShiftCore
                 row.isEnabled = model.canChange && state?.available == true && state?.enabled != nil
                 row.toolTip = model.issue(for: feature) ?? state?.detail
                 menu.addItem(row)
+                if feature == .grayscale { addIntensitySubmenu(to: menu) }
             }
             menu.addItem(.separator())
             if model.hasSession || model.hasIndividualChanges {
                 let restore = item("Restore All Changes", #selector(restoreAll))
                 restore.isEnabled = model.canChange
                 menu.addItem(restore)
-            }
-            if model.generalError != nil || !model.issues.isEmpty {
-                menu.addItem(item("Settings need attention…", #selector(showWindow(_:))))
             }
         } else if model.refreshing || model.permissions.checking {
             let checking = NSMenuItem(title: "Checking Automation Permission…", action: nil, keyEquivalent: "")
@@ -124,15 +131,37 @@ import MonkShiftCore
             menu.addItem(item("Grant Required Permission…", #selector(showWindow(_:))))
         }
         menu.addItem(item("Open MonkShift…", #selector(showWindow(_:))))
-        let about = NSMenuItem(title: "Offline · Open source · MIT", action: nil, keyEquivalent: "")
-        about.isEnabled = false
-        menu.addItem(about)
         menu.addItem(.separator())
         let quit = item("Quit MonkShift", #selector(quit))
         quit.isEnabled = !model.busy
         menu.addItem(quit)
         // Auto-enabling would ignore our explicit privacy and busy gates.
         menu.autoenablesItems = false
+    }
+
+    private func addIntensitySubmenu(to menu: NSMenu) {
+        let percentage = Int((model.intensity * 100).rounded())
+        let parent = NSMenuItem(title: "Grayscale intensity · \(percentage)%", action: nil, keyEquivalent: "")
+        parent.isEnabled = model.canAdjustIntensity
+        let submenu = NSMenu(title: "Grayscale intensity")
+        submenu.autoenablesItems = false
+        let control = NSMenuItem(title: "Grayscale intensity", action: nil, keyEquivalent: "")
+        control.isEnabled = model.canAdjustIntensity
+        control.view = GrayscaleIntensityMenuView(intensity: model.intensity, enabled: model.canAdjustIntensity,
+            filterEnabled: model.states[.grayscale]?.enabled == true,
+            onEditingChanged: { [weak model] editing in model?.isEditingIntensity = editing },
+            onCommit: { [weak self, weak menu] intensity in
+                guard let self else { return }
+                if self.model.canAdjustIntensity {
+                    self.model.intensity = intensity
+                    self.model.commitIntensity()
+                }
+                // Saving a value while grayscale is off does not start an OS refresh.
+                if let menu { self.populateMenu(menu) }
+            })
+        submenu.addItem(control)
+        parent.submenu = submenu
+        menu.addItem(parent)
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {

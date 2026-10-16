@@ -29,6 +29,7 @@ import Foundation
 @main enum CheckRunner {
     @MainActor static func main() async {
         let suite = SettingsEngineTests()
+        let summary = FeatureSummaryTests()
         let tests: [(String, () async throws -> Void)] = [
             ("Snapshots saved before mutation", suite.testAllSnapshotsPersistBeforeFirstMutation),
             ("Disk failure blocks mutation", suite.testDiskFailurePreventsEveryMutation),
@@ -42,7 +43,12 @@ import Foundation
             ("Disabling pre-existing feature saves baseline", suite.testDisablingPreexistingFeatureSavesItsBaseline),
             ("Restore progress persistence failure", suite.testSavingRestoreProgressFailureKeepsRetryableJournal),
             ("File round trip and corruption", suite.testFileStoreRoundTripAndCorruptFilePreservation),
-            ("Unknown restore version rejected", suite.testUnknownRestoreVersionIsRejected)
+            ("Unknown restore version rejected", suite.testUnknownRestoreVersionIsRejected),
+            ("All enabled requires observed settings", summary.testAllEnabledRequiresEveryObservedSetting),
+            ("Off requires observed settings", summary.testAllOffRequiresEveryObservedSetting),
+            ("Partial status reflects individual settings", summary.testPartialReflectsIndividualSettings),
+            ("Unknown states prevent false status", summary.testMissingAndUnknownSettingsPreventOffOrAllEnabled),
+            ("Unavailable states prevent false success", summary.testUnavailableSettingNeverCountsAsConfirmedEnabled)
         ]
         for (name, test) in tests {
             let before = CheckResults.failures.count

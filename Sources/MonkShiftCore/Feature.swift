@@ -1,7 +1,7 @@
 import Foundation
 
 public enum Feature: String, CaseIterable, Codable, Identifiable {
-    case instantDock, hideDock, hideMenuBar, instantMenuBar
+    case instantDock, hideDock, hideMenuBar
     case stageManager, hideRecentApps, oneWindowAtATime, blackWallpaper, grayscale
 
     public var id: String { rawValue }
@@ -10,7 +10,6 @@ public enum Feature: String, CaseIterable, Codable, Identifiable {
         case .instantDock: return "Instant Dock animations"
         case .hideDock: return "Automatically hide Dock"
         case .hideMenuBar: return "Automatically hide menu bar"
-        case .instantMenuBar: return "Instant menu bar animation"
         case .stageManager: return "Stage Manager"
         case .hideRecentApps: return "Hide recent apps in Stage Manager"
         case .oneWindowAtATime: return "Show windows one at a time"

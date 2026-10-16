@@ -13,7 +13,7 @@ import MonkShiftCore
 
 @MainActor final class FakeBackend: SettingsBackend {
     var values: [Feature: Data] = [:]
-    var unavailable: Set<Feature> = [.instantMenuBar]
+    var unavailable: Set<Feature> = []
     var failApply: Set<Feature> = []
     var failRestore: Set<Feature> = []
     var writes = 0
@@ -43,10 +43,11 @@ import MonkShiftCore
 @MainActor final class SettingsEngineTests {
     func testAllSnapshotsPersistBeforeFirstMutation() async throws {
         let backend = FakeBackend(), store = MemoryStore()
+        backend.unavailable = [.stageManager]
         let engine = try SettingsEngine(backend: backend, store: store)
         backend.beforeWrite = { expectEqual(store.journal.monk.count, Feature.allCases.count - 1) }
         let issues = try engine.enableMonk(intensity: 0.5)
-        expectEqual(issues.map(\.feature), [.instantMenuBar])
+        expectEqual(issues.map(\.feature), [.stageManager])
         expectTrue(engine.hasMonkSession)
     }
 

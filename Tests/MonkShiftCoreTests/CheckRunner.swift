@@ -1,0 +1,57 @@
+import Foundation
+
+@MainActor private enum CheckResults {
+    static var failures: [String] = []
+    static func fail(_ message: String, file: String, line: UInt) {
+        failures.append("\(file):\(line): \(message)")
+    }
+}
+
+@MainActor func expectEqual<T: Equatable>(_ lhs: @autoclosure () throws -> T, _ rhs: @autoclosure () throws -> T,
+    file: String = #filePath, line: UInt = #line) {
+    do {
+        let left = try lhs(), right = try rhs()
+        if left != right { CheckResults.fail("Expected \(right), got \(left)", file: file, line: line) }
+    } catch { CheckResults.fail("Unexpected error: \(error)", file: file, line: line) }
+}
+
+@MainActor func expectTrue(_ value: @autoclosure () throws -> Bool, file: String = #filePath, line: UInt = #line) {
+    expectEqual(try value(), true, file: file, line: line)
+}
+@MainActor func expectFalse(_ value: @autoclosure () throws -> Bool, file: String = #filePath, line: UInt = #line) {
+    expectEqual(try value(), false, file: file, line: line)
+}
+@MainActor func expectThrows<T>(_ operation: @autoclosure () throws -> T, file: String = #filePath, line: UInt = #line) {
+    do { _ = try operation(); CheckResults.fail("Expected an error", file: file, line: line) }
+    catch { /* Expected. */ }
+}
+
+@main enum CheckRunner {
+    @MainActor static func main() async {
+        let suite = SettingsEngineTests()
+        let tests: [(String, () async throws -> Void)] = [
+            ("Snapshots saved before mutation", suite.testAllSnapshotsPersistBeforeFirstMutation),
+            ("Disk failure blocks mutation", suite.testDiskFailurePreventsEveryMutation),
+            ("Repeated enable keeps original", suite.testRepeatedEnablePreservesOriginalSnapshot),
+            ("Failed apply remains recoverable", suite.testApplyFailureKeepsRecoverableOriginal),
+            ("Partial restore survives restart", suite.testRestoreFailureRetainsOnlyPendingRecordAcrossRestart),
+            ("Individual baseline survives session", suite.testIndividualBaselineSurvivesMonkSession),
+            ("Session edits preserve baseline", suite.testEditsDuringMonkDoNotCreateConflictingIndividualBaseline),
+            ("Individual off disables original on state", suite.testIndividualOffReallyDisablesAnOriginallyEnabledFeature),
+            ("Individual apply failure recovery", suite.testFailedIndividualApplyIsRecoverable),
+            ("Disabling pre-existing feature saves baseline", suite.testDisablingPreexistingFeatureSavesItsBaseline),
+            ("Restore progress persistence failure", suite.testSavingRestoreProgressFailureKeepsRetryableJournal),
+            ("File round trip and corruption", suite.testFileStoreRoundTripAndCorruptFilePreservation),
+            ("Unknown restore version rejected", suite.testUnknownRestoreVersionIsRejected)
+        ]
+        for (name, test) in tests {
+            let before = CheckResults.failures.count
+            do { try await test() }
+            catch { CheckResults.failures.append("\(name): \(error)") }
+            print("\(before == CheckResults.failures.count ? "PASS" : "FAIL") \(name)")
+        }
+        for failure in CheckResults.failures { print(failure) }
+        print("\(tests.count) tests, \(CheckResults.failures.count) failures. No macOS settings changed.")
+        if !CheckResults.failures.isEmpty { exit(1) }
+    }
+}

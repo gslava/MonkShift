@@ -1,0 +1,69 @@
+# Swift Package Manager and generated builds
+/.build/
+/build/
+/.swiftpm/
+/DerivedData/
+/dist/
+/coverage/
+*.app/
+*.dSYM/
+*.xcarchive/
+*.xcresult/
+*.dmg
+*.pkg
+*.profraw
+*.profdata
+
+# Xcode user settings (keep shared project settings and schemes)
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+
+# Local IDE, assistant, and cloud configuration
+/.idea/
+/.vscode/
+/.codex/
+/.agents/
+/.claude/
+/.aws/
+
+# Credentials, signing identities, and provisioning profiles
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+
+# Local implementation and verification notes
+/PLANS.MD
+/VERIFICATION.md
+
+# Logs, caches, temporary files, and editor backups
+/.cache/
+/logs/
+/tmp/
+/temp/
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# macOS / Finder metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100/
+.Trashes/
+Icon?

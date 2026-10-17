@@ -4,6 +4,8 @@ import AppKit
 @MainActor final class GrayscaleIntensityMenuView: NSView {
     private let slider: MenuIntensitySlider
     private let percentage = NSTextField(labelWithString: "")
+    private let title = NSTextField(labelWithString: "Grayscale intensity")
+    private let hint = NSTextField(labelWithString: "")
     private let onCommit: (Double) -> Void
 
     init(intensity: Double, enabled: Bool, filterEnabled: Bool,
@@ -14,7 +16,6 @@ import AppKit
         super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 88))
         autoresizingMask = [.width]
 
-        let title = NSTextField(labelWithString: "Grayscale intensity")
         title.font = .menuFont(ofSize: 13)
         addSubview(title)
 
@@ -23,8 +24,6 @@ import AppKit
         addSubview(percentage)
 
         slider.isContinuous = true
-        let canEdit = enabled && filterEnabled
-        slider.isEnabled = canEdit
         slider.target = self
         slider.action = #selector(valueChanged(_:))
         slider.onEditingChanged = onEditingChanged
@@ -33,7 +32,6 @@ import AppKit
         slider.toolTip = "0% is the lowest supported intensity. Turn grayscale off to remove the filter."
         addSubview(slider)
 
-        let hint = NSTextField(labelWithString: filterEnabled ? "Applied when you release the slider." : "Enable grayscale to adjust intensity.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         addSubview(hint)
@@ -55,14 +53,20 @@ import AppKit
             hint.topAnchor.constraint(equalTo: slider.bottomAnchor, constant: 4),
             hint.heightAnchor.constraint(equalToConstant: 16)
         ])
-        if !canEdit {
-            title.textColor = .disabledControlTextColor
-            percentage.textColor = .disabledControlTextColor
-        }
-        updatePercentage()
+        update(intensity: intensity, enabled: enabled, filterEnabled: filterEnabled)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(intensity: Double, enabled: Bool, filterEnabled: Bool) {
+        guard !slider.isTrackingMouse else { return }
+        slider.doubleValue = min(1, max(0, intensity)) * 100
+        slider.isEnabled = enabled && filterEnabled
+        title.textColor = slider.isEnabled ? .labelColor : .disabledControlTextColor
+        percentage.textColor = title.textColor
+        hint.stringValue = filterEnabled ? "Applied when you release the slider." : "Enable grayscale to adjust intensity."
+        updatePercentage()
+    }
 
     @objc private func valueChanged(_ sender: NSSlider) {
         updatePercentage()

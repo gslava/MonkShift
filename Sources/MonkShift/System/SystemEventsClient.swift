@@ -40,11 +40,11 @@ final class SystemEventsClient: @unchecked Sendable {
                         do { reply = try transport(event, timeout) }
                         catch {
                             let error = error as NSError
-                            throw MonkError("System Events request failed (\(error.code)): \(error.localizedDescription). Check MonkShift under Privacy & Security → Automation.")
+                            throw Self.requestError(code: error.code, message: "System Events request failed: \(error.localizedDescription)")
                         }
                         if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)), error.int32Value != 0 {
-                            let message = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?.stringValue ?? "System Events failed."
-                            throw MonkError("\(message) (\(error.int32Value)). Check MonkShift under Privacy & Security → Automation.")
+                            let message = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?.stringValue ?? "System Events failed"
+                            throw Self.requestError(code: Int(error.int32Value), message: message)
                         }
                         if value != nil { return true }
                         guard let data = reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)),
@@ -61,13 +61,27 @@ final class SystemEventsClient: @unchecked Sendable {
 
     private static func event(_ setting: Setting, value: Bool?) -> NSAppleEventDescriptor {
         let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.systemevents")
-        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass),
+        // Property get/set commands belong to 'core', not the 'aevt' lifecycle class.
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite),
             eventID: value == nil ? AEEventID(kAEGetData) : AEEventID(kAESetData), targetDescriptor: target,
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
         let dock = property(0x64706173, container: .null()) // dpas: application's dock preferences
         event.setParam(property(setting.rawValue, container: dock), forKeyword: AEKeyword(keyDirectObject))
         if let value { event.setParam(NSAppleEventDescriptor(boolean: value), forKeyword: AEKeyword(keyAEData)) }
         return event
+    }
+
+    private static func requestError(code: Int, message: String) -> MonkError {
+        let guidance: String
+        switch code {
+        case Int(errAEEventNotPermitted), Int(errAEEventWouldRequireUserConsent):
+            guidance = " Check MonkShift under Privacy & Security → Automation."
+        case Int(errAEEventNotHandled):
+            guidance = " System Events did not recognize this request."
+        default:
+            guidance = ""
+        }
+        return MonkError("\(message) (\(code)).\(guidance)")
     }
 
     private static func property(_ code: UInt32, container: NSAppleEventDescriptor) -> NSAppleEventDescriptor {

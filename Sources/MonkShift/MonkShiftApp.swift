@@ -35,6 +35,7 @@ import MonkShiftCore
     private let directory: URL
     private var model: AppModel!
     private var statusItem: NSStatusItem!
+    private var settingsMenu: SettingsMenuController!
     private var window: NSWindow?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var reopenObserver: NSObjectProtocol?
@@ -50,13 +51,12 @@ import MonkShiftCore
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = MonkIcon.menuBarImage()
         statusItem.button?.toolTip = "MonkShift — focus controls"
-        let menu = NSMenu()
-        menu.delegate = self
-        statusItem.menu = menu
-        model.onRefresh = { [weak self, weak menu] in
-            guard let self, let menu else { return }
-            self.populateMenu(menu)
-        }
+        settingsMenu = SettingsMenuController(model: model,
+            showWindow: { [weak self] in self?.showWindow(nil) },
+            quit: { NSApp.terminate(nil) })
+        settingsMenu.menu.delegate = self
+        statusItem.menu = settingsMenu.menu
+        model.onRefresh = { [weak self] in self?.updateMenu() }
         installApplicationMenu()
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.activeSpaceDidChangeNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -71,8 +71,11 @@ import MonkShiftCore
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(nil); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Never interrupt an in-flight change between OS mutation and durable journal update.
-        model?.busy == true ? .terminateCancel : .terminateNow
+        // Keep Quit visually stable while allowing accepted changes to finish safely.
+        if model?.prepareToQuit(onReady: { sender.reply(toApplicationShouldTerminate: true) }) == true {
+            return .terminateLater
+        }
+        return .terminateNow
     }
     func applicationWillTerminate(_ notification: Notification) {
         model.shortcuts.shutdown()
@@ -109,90 +112,13 @@ import MonkShiftCore
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         model.refresh()
-        populateMenu(menu)
+        updateMenu()
     }
 
-    private func populateMenu(_ menu: NSMenu) {
-        // An asynchronous refresh must not detach a slider while it is tracking.
-        guard !model.isEditingIntensity else { return }
-        menu.removeAllItems()
-        let heading = NSMenuItem(title: "MonkShift · \(model.statusTitle)", action: nil, keyEquivalent: "")
-        heading.isEnabled = false
-        menu.addItem(heading)
-        let detail = NSMenuItem(title: model.statusDetail, action: nil, keyEquivalent: "")
-        detail.isEnabled = false
-        menu.addItem(detail)
+    private func updateMenu() {
+        settingsMenu.update()
         statusItem.button?.toolTip = "MonkShift · \(model.statusTitle)\n\(model.statusDetail)"
-        if model.statusNeedsAttention {
-            menu.addItem(item("Settings need attention…", #selector(showWindow(_:))))
-        }
-        menu.addItem(.separator())
-        if model.permissions.granted {
-            let monk = item(model.hasSession ? "Disable Monk Mode — Restore Previous" : "Monk Mode (Enable All)", #selector(toggleMonk))
-            monk.isEnabled = model.canChange
-            menu.addItem(monk)
-            for feature in Feature.allCases {
-                let state = model.states[feature]
-                let row = item(feature.title + (state?.available == false ? " — unavailable" : ""), #selector(toggleFeature(_:)))
-                row.representedObject = feature.rawValue
-                row.state = state?.enabled == true ? .on : state?.enabled == false ? .off : .mixed
-                row.isEnabled = model.canChange && state?.available == true && state?.enabled != nil
-                row.toolTip = model.issue(for: feature) ?? state?.detail
-                menu.addItem(row)
-                if feature == .grayscale { addIntensityControl(to: menu) }
-            }
-            menu.addItem(.separator())
-            if model.hasSession || model.hasIndividualChanges {
-                let restore = item("Restore All Changes", #selector(restoreAll))
-                restore.isEnabled = model.canChange
-                menu.addItem(restore)
-            }
-        } else if model.refreshing || model.permissions.checking {
-            let checking = NSMenuItem(title: "Checking Automation Permission…", action: nil, keyEquivalent: "")
-            checking.isEnabled = false
-            menu.addItem(checking)
-        } else {
-            menu.addItem(item("Grant Required Permission…", #selector(showWindow(_:))))
-        }
-        menu.addItem(item("Open MonkShift…", #selector(showWindow(_:))))
-        menu.addItem(.separator())
-        let quit = item("Quit MonkShift", #selector(quit))
-        quit.isEnabled = !model.busy
-        menu.addItem(quit)
-        // Auto-enabling would ignore our explicit privacy and busy gates.
-        menu.autoenablesItems = false
     }
-
-    private func addIntensityControl(to menu: NSMenu) {
-        let percentage = Int((model.intensity * 100).rounded())
-        let control = NSMenuItem(title: "Grayscale intensity · \(percentage)%", action: nil, keyEquivalent: "")
-        control.isEnabled = model.canAdjustMenuIntensity
-        control.view = GrayscaleIntensityMenuView(intensity: model.intensity, enabled: model.canAdjustMenuIntensity,
-            filterEnabled: model.states[.grayscale]?.enabled == true,
-            onEditingChanged: { [weak model] editing in model?.isEditingIntensity = editing },
-            onCommit: { [weak self, weak menu] intensity in
-                guard let self else { return }
-                if self.model.canAdjustMenuIntensity {
-                    self.model.intensity = intensity
-                    self.model.commitIntensity()
-                }
-                if let menu { self.populateMenu(menu) }
-            })
-        menu.addItem(control)
-    }
-
-    private func item(_ title: String, _ action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        return item
-    }
-    @objc private func toggleMonk() { model.toggleMonk() }
-    @objc private func toggleFeature(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let feature = Feature(rawValue: raw) else { return }
-        model.toggle(feature)
-    }
-    @objc private func restoreAll() { model.restoreAll() }
-    @objc private func quit() { NSApp.terminate(nil) }
 
     private func installApplicationMenu() {
         let main = NSMenu()

@@ -14,7 +14,7 @@ enum SystemEventsChecks {
         let client = SystemEventsClient { event, timeout in
             try require(!Thread.isMainThread, "System Events transport ran on the main thread")
             try require(timeout == 5, "Request lost its bounded timeout")
-            try require(event.eventClass == AEEventClass(kCoreEventClass), "Wrong event class")
+            try require(event.eventClass == AEEventClass(kAECoreSuite), "Wrong event class")
             let direct = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))!
             try require(direct.descriptorType == DescType(typeObjectSpecifier), "Request is not a property specifier")
             let property = direct.forKeyword( AEKeyword(keyAEKeyData))!.typeCodeValue
@@ -34,6 +34,37 @@ enum SystemEventsChecks {
         let enabled = try await client.read(.hideDock)
         try require(!enabled, "An off setting was reported as enabled")
         try await client.write(.hideMenuBar, enabled: true)
+    }
+
+    static func testCommandsMatchScriptingDictionary() async throws {
+        // Use macOS's command definitions as an independent protocol reference.
+        // This only reads XML; it never sends an event or requests permission.
+        let dictionary = try XMLDocument(contentsOf: URL(fileURLWithPath:
+            "/System/Library/Frameworks/Foundation.framework/Resources/Intrinsics.sdef"))
+        let getCode = try dictionary.nodes(forXPath: "//command[@name='get']/@code").first?.stringValue
+        let setCode = try dictionary.nodes(forXPath: "//command[@name='set']/@code").first?.stringValue
+        try require(getCode != nil && setCode != nil, "macOS scripting command definitions are missing")
+
+        @Sendable func code(_ value: UInt32) -> String {
+            String(bytes: [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: value >> $0) }, encoding: .ascii)!
+        }
+        for setting in [SystemEventsClient.Setting.hideDock, .hideMenuBar] {
+            for enabled in [false, true] {
+                let client = SystemEventsClient { event, _ in
+                    let command = code(event.eventClass) + code(event.eventID)
+                    let value = event.paramDescriptor(forKeyword: AEKeyword(keyAEData))
+                    try require(command == (value == nil ? getCode : setCode),
+                        "Apple Event command \(command) does not match macOS's get/set dictionary")
+                    if let value {
+                        try require(value.booleanValue == enabled, "Write lost its Boolean value")
+                    }
+                    return reply(enabled)
+                }
+                let observed = try await client.read(setting)
+                try require(observed == enabled, "Read lost its Boolean value")
+                try await client.write(setting, enabled: enabled)
+            }
+        }
     }
 
     @MainActor static func testMainActorRemainsResponsive() async throws {
@@ -87,23 +118,26 @@ enum SystemEventsChecks {
         } catch is CheckFailure { throw CheckFailure(description: "Missing reply silently became an off state") }
         catch { try require(error.localizedDescription.contains("unknown"), "Unknown reply lost its explanation") }
 
-        let denied = SystemEventsClient { _, _ in
-            let result = reply(nil)
-            result.setParam(NSAppleEventDescriptor(int32: -1743), forKeyword: AEKeyword(keyErrorNumber))
-            result.setParam(NSAppleEventDescriptor(string: "Not authorized"), forKeyword: AEKeyword(keyErrorString))
-            return result
+        for (code, needsPermission) in [(-1743, true), (-1744, true), (-1708, false), (-1712, false)] {
+            for throwsError in [false, true] {
+                let client = SystemEventsClient { _, _ in
+                    if throwsError { throw NSError(domain: NSOSStatusErrorDomain, code: code) }
+                    let result = reply(nil)
+                    result.setParam(NSAppleEventDescriptor(int32: Int32(code)), forKeyword: AEKeyword(keyErrorNumber))
+                    result.setParam(NSAppleEventDescriptor(string: "Request failed"), forKeyword: AEKeyword(keyErrorString))
+                    return result
+                }
+                do {
+                    if throwsError { _ = try await client.read(.hideDock) }
+                    else { try await client.write(.hideMenuBar, enabled: true) }
+                    throw CheckFailure(description: "System Events failure counted as success")
+                } catch is CheckFailure { throw CheckFailure(description: "System Events failure counted as success") }
+                catch {
+                    try require(error.localizedDescription.contains("\(code)"), "System Events error lost its code")
+                    try require(error.localizedDescription.contains("Automation") == needsPermission,
+                        "Automation guidance did not match the actual failure")
+                }
+            }
         }
-        do {
-            try await denied.write(.hideDock, enabled: true)
-            throw CheckFailure(description: "Permission failure counted as success")
-        } catch is CheckFailure { throw CheckFailure(description: "Permission failure counted as success") }
-        catch { try require(error.localizedDescription.contains("-1743"), "Permission error lost its code") }
-
-        let timeout = SystemEventsClient { _, _ in throw NSError(domain: NSOSStatusErrorDomain, code: -1712) }
-        do {
-            _ = try await timeout.read(.hideDock)
-            throw CheckFailure(description: "Timeout counted as success")
-        } catch is CheckFailure { throw CheckFailure(description: "Timeout counted as success") }
-        catch { try require(error.localizedDescription.contains("-1712"), "Timeout lost its code") }
     }
 }

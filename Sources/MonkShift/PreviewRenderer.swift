@@ -73,6 +73,8 @@ private struct IntensityMenuPreview: NSViewRepresentable {
             onEditingChanged: { _ in }, onCommit: { _ in })
     }
 
-    func updateNSView(_ view: GrayscaleIntensityMenuView, context: Context) {}
+    func updateNSView(_ view: GrayscaleIntensityMenuView, context: Context) {
+        view.update(intensity: intensity, enabled: enabled, filterEnabled: filterEnabled)
+    }
 }
 #endif

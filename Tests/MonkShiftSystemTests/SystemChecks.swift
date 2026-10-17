@@ -29,6 +29,7 @@ func require(_ condition: Bool, _ message: String) throws {
             ("File lock is released after a crash", testLockCrashRelease),
             ("Lock file errors fail closed", testLockFailure),
             ("Typed Dock/menu bar events preserve values", SystemEventsChecks.testTypedEvents),
+            ("Read/write commands match the macOS scripting dictionary", SystemEventsChecks.testCommandsMatchScriptingDictionary),
             ("Slow system reply leaves main actor responsive", { try await SystemEventsChecks.testMainActorRemainsResponsive() }),
             ("System event transport is serialized", SystemEventsChecks.testTransportIsSerialized),
             ("Unknown, denied and timed out replies fail honestly", SystemEventsChecks.testUnknownAndErrorRepliesAreRejected)

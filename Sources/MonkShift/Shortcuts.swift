@@ -49,12 +49,13 @@ struct Shortcut: Codable, Equatable {
     private var handler: EventHandlerRef?
     private var active = false
 
-    init() {
+    init(installHandler: Bool = true) {
         let saved = UserDefaults.standard.data(forKey: "shortcuts")
             .flatMap { try? JSONDecoder().decode([String: Shortcut].self, from: $0) } ?? [:]
         for action in ShortcutAction.allCases {
             shortcuts[action] = saved[String(action.rawValue)] ?? Shortcut(key: action.defaultKey)
         }
+        guard installHandler else { return }
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, context -> OSStatus in
             guard let event, let context else { return OSStatus(eventNotHandledErr) }
@@ -74,7 +75,7 @@ struct Shortcut: Codable, Equatable {
     }
 
     func activate() {
-        guard !active else { return }
+        guard !active, handler != nil else { return }
         active = true
         for action in ShortcutAction.allCases {
             do { try register(shortcuts[action]!, for: action) }

@@ -69,13 +69,13 @@ struct ControlsView: View {
                     }
                     Spacer()
                     Button("Refresh", systemImage: "arrow.clockwise") { model.refresh() }
-                        .labelStyle(.iconOnly).help("Read current macOS settings").disabled(model.busy)
+                        .labelStyle(.iconOnly).help("Read current macOS settings")
                 }
                 SettingsStatusView(model: model)
                 Button { model.toggleMonk() } label: {
                     HStack {
-                        Image(systemName: model.hasSession ? "arrow.uturn.backward" : "circle.lefthalf.filled")
-                        Text(model.hasSession ? "Disable Monk Mode · Restore Previous Settings" : "Monk Mode · Enable All")
+                        Image(systemName: model.displayedHasSession ? "arrow.uturn.backward" : "circle.lefthalf.filled")
+                        Text(model.displayedHasSession ? "Disable Monk Mode · Restore Previous Settings" : "Monk Mode · Enable All")
                         Spacer()
                     }
                     .padding(.vertical, 6)
@@ -119,7 +119,7 @@ struct ControlsView: View {
                 Spacer()
                 Button("Shortcuts…") { showShortcuts = true }.disabled(!model.canChange)
                 Button("Restore All Changes") { model.restoreAll() }
-                    .disabled(!model.canChange || (!model.hasSession && !model.hasIndividualChanges))
+                    .disabled(!model.canChange || (!model.displayedHasSession && !model.hasIndividualChanges && model.requestedValues.isEmpty))
             }
             .padding(.horizontal, 24).padding(.vertical, 14)
         }
@@ -152,13 +152,13 @@ struct FeatureRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Toggle(feature.title, isOn: Binding(
-                    get: { model.states[feature]?.enabled == true },
+                    get: { model.displayedEnabled(feature) == true },
                     set: { model.set(feature, enabled: $0) }
                 ))
                 .toggleStyle(.checkbox)
                 .disabled(!model.canChange || state?.available != true || state?.enabled == nil)
                 Spacer(minLength: 8)
-                Text(state?.available == false ? "Unavailable" : state?.enabled.map { $0 ? "On" : "Off" } ?? "Unknown")
+                Text(state?.available == false ? "Unavailable" : model.displayedEnabled(feature).map { $0 ? "On" : "Off" } ?? "Unknown")
                     .font(.callout).foregroundStyle(.secondary)
             }
             if let detail = model.issue(for: feature) ?? state?.detail {

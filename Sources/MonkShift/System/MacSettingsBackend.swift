@@ -1,7 +1,11 @@
 import AppKit
 import MonkShiftCore
 
-@MainActor final class MacSettingsBackend: SettingsBackend {
+@MainActor protocol ObservedSettingsBackend: SettingsBackend {
+    func intensity() async throws -> Double
+}
+
+@MainActor final class MacSettingsBackend: ObservedSettingsBackend {
     private let wallpaper: WallpaperService
     private let preferences = PreferencesWorker()
     private let events = SystemEventsClient()

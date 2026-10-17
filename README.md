@@ -60,7 +60,7 @@ releases the lock on exit or a crash; an old PID file alone cannot block startup
 
 Every setting has a checkbox in the window and in the native menu bar menu. Status is refreshed when opening the menu/window, returning to MonkShift, changing the desktop Space while the window is visible, waking the Mac, and after applying settings. Use **Refresh** for changes made elsewhere. No repeating background polling is used.
 
-The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of eight. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. Applying/checking states and operation errors are shown separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
+The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of eight. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. The summary stays visible during background work. A small activity indicator appears in a fixed space in the window only if work lasts longer than half a second. Operation errors appear separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
 
 | Setting | Implementation and scope |
 | --- | --- |
@@ -73,7 +73,7 @@ The top of the window and menu shows **All enabled**, **Partially enabled**, **O
 | Black wallpaper | An 8 × 8 opaque black PNG generated locally, applied through `NSWorkspace` to each connected display in the current desktop Space. |
 | Grayscale | System display color filter category 1, type 1, through dynamically resolved `MADisplayFilterPref*` APIs and the system Universal Access daemon. |
 
-The grayscale slider is available in the window and **directly below the grayscale checkbox in the menu bar menu**. It shows the current percentage while dragging and applies once on release. Both controls share the same value, default to **50%**, and store the preference locally. The menu slider is disabled when grayscale is off; the window slider can still save a preferred amount for the next enable. Use the window slider for keyboard adjustment. Controls are disabled while applying/reading settings, without permission, or when the filter state is unknown/unavailable. The slider normalizes the native exported minimum/maximum intensity range to 0–100% (on the development Mac, native 0.25–1.0). 0% is the lowest supported filter intensity; switch the checkbox off to remove the filter completely. While grayscale is on, refresh reads its current intensity from macOS and slider changes apply after release.
+The grayscale slider is available in the window and **directly below the grayscale checkbox in the menu bar menu**. It shows the current percentage while dragging and applies once on release. Both controls share the same value, default to **50%**, and store the preference locally. The menu slider is disabled when grayscale is off; the window slider can still save a preferred amount for the next enable. Use the window slider for keyboard adjustment. Controls stay available during routine reads and changes; permission, storage errors and unknown/unavailable filter state still block unsafe changes. Each slider release queues its chosen intensity. The slider normalizes the native exported minimum/maximum intensity range to 0–100% (on the development Mac, native 0.25–1.0). 0% is the lowest supported filter intensity; switch the checkbox off to remove the filter completely. While grayscale is on, refresh reads its current intensity from macOS without replacing an active drag or a newer queued value.
 
 <p>
   <img src="docs/images/intensity-menu-light.png" width="280" alt="Native menu intensity slider while grayscale is enabled">
@@ -92,10 +92,16 @@ Menu control fixtures, shown separately from the surrounding native menu.
 
 Individual checkbox changes also save their first baseline. Unchecking restores that feature's saved configuration and ensures the feature is off. **Restore All Changes** restores the Monk session first, then the earlier individual baselines. This means a previously enabled system feature can be restored to enabled. Individual edits during a Monk session do not replace the session baseline.
 
-System operations suspend while awaiting background work. A second mutation is
-rejected until the current operation finishes; reads and UI actions do not
-interleave with a mutation. Snapshots still reach durable storage before the
-first OS change, and a failed finalization retains the relevant restore records.
+Changes run in a sequential queue. Checkboxes immediately show the requested
+value, while the summary counts only confirmed macOS state. Further clicks and
+slider releases remain available and execute in order after any current read or
+change. Failed changes return to the observed value and retain their error and
+restore record. Automation permission is checked before each queued change;
+revocation cancels the remaining queue. Native menu items and the slider update
+in place. Snapshots still reach durable storage before the first OS change, and
+a failed finalization retains the relevant restore records. **Quit MonkShift**
+stays active with the same appearance during changes. If clicked while changes
+are pending, it finishes accepted changes before exiting and accepts no new ones.
 
 If restoration fails, the corresponding record stays on disk for retry. For a disconnected display, reconnect it and retry **Restore All Changes**. An unreadable/corrupted restore file blocks modifications rather than replacing the file. A missing file on a first launch is normal.
 
@@ -131,13 +137,24 @@ No fixed RAM claim is made until the release build is measured. To measure, laun
 
 The same script compiles the app's actual permission manager with a fake client and runs 8 additional checks: idle-target recovery, denied/missing/revoked consent, unavailable targets, launch failures, concurrent refreshes, and explicit request completion. No real services are started or privacy prompts requested by these checks.
 
-Eight isolated system checks cover cross-process file locking, normal/crash
+Nine isolated system checks cover cross-process file locking, normal/crash
 release, lock-file errors, typed Apple Event requests, background serialization,
-main-actor responsiveness during a slow fake reply, and unknown/denied/timed-out
-replies. They use temporary files, short-lived test subprocesses and a fake event
-transport; no real Apple Events are sent.
+main-actor responsiveness during a slow fake reply, and unknown/denied/unhandled/timed-out
+replies. Command codes are compared with macOS's installed scripting dictionary
+for both Dock and menu bar reads/writes, including true and false values. Only
+permission failures suggest changing Automation access. These checks use temporary
+files, short-lived test subprocesses and a fake event transport; no real Apple
+Events are sent.
 
-`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation and applying states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
+Fourteen UI checks use the actual app model and native menu with fake settings and
+permissions, isolated preferences/storage, and global shortcuts disabled. They
+cover input during refresh, rapid toggles, failed-change recovery, captured slider
+values, in-flight intensity reads, finalization errors, permission revocation,
+native menu/slider identity, stable Quit availability, queued restoration and
+deferred shutdown while changes or a refresh are pending.
+No real Apple Events, privacy prompts or system-setting writes are performed.
+
+`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
 
 Manual acceptance checks on **both macOS 14 and macOS 15**:
 
@@ -145,7 +162,7 @@ Manual acceptance checks on **both macOS 14 and macOS 15**:
 - After granting permission, close the window and let System Events exit while idle. Open MonkShift's menu: controls should appear after the background check, without another consent prompt. Repeat after restarting MonkShift.
 - Record initial Dock, menu bar, Stage Manager, wallpaper and filter states. Enable each setting and verify its actual visual effect, including Stage Manager grouping with two windows from the same app.
 - Enable Monk Mode; verify all eight settings and the aggregate status at the top of both the window and menu. Disable one setting and confirm **Partially enabled** appears even with a saved session. Disable Monk Mode and compare to the recorded baseline. Unknown/unavailable readings must not produce **All enabled** or a false **Off**.
-- Start with a different color filter enabled. Enable grayscale, adjust its slider, and restore; confirm the original type and intensity are preserved. Repeat through the menu bar's direct **Grayscale intensity** control: the percentage should follow dragging, settings should apply on release, and the window should show the same value. With grayscale off, verify the menu slider is disabled; choose a preferred amount in the window, then enable the filter and verify that amount is used. Check both controls are disabled during changes and when the filter is unavailable/unknown.
+- Start with a different color filter enabled. Enable grayscale, adjust its slider, and restore; confirm the original type and intensity are preserved. Repeat through the menu bar's direct **Grayscale intensity** control: the percentage should follow dragging, settings should apply on release, and the window should show the same value. With grayscale off, verify the menu slider is disabled; choose a preferred amount in the window, then enable the filter and verify that amount is used. Check both controls stay available during changes and are disabled when the filter is unavailable/unknown. Make several quick checkbox/slider changes: confirm the last chosen values are retained, the interface does not grey out, and the open native menu slider retains focus through background refreshes.
 - Quit while Monk Mode is active. Reopen and restore the previous state.
 - Launch a second copy while MonkShift is running, including with its window closed: only the existing window should open and no second menu bar item should appear. After terminating the owner, verify a subsequent launch works and saved restoration remains available.
 - Change an individual setting, start Monk Mode, edit another setting, disable Monk Mode, then Restore All; verify baseline ordering.

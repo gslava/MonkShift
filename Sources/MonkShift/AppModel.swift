@@ -2,8 +2,8 @@ import AppKit
 import MonkShiftCore
 
 @MainActor final class AppModel: ObservableObject {
-    let permissions = PermissionManager()
-    let shortcuts = ShortcutManager()
+    let permissions: PermissionManager
+    let shortcuts: ShortcutManager
     @Published private(set) var states: [Feature: FeatureState] = [:]
     @Published private(set) var issues: [OperationIssue] = []
     @Published private(set) var generalError: String?
@@ -11,48 +11,76 @@ import MonkShiftCore
     @Published private(set) var hasSession = false
     @Published private(set) var hasIndividualChanges = false
     @Published var intensity: Double
+    @Published private(set) var requestedValues: [Feature: Bool] = [:]
+    @Published private(set) var requestedSession: Bool?
     var isEditingIntensity = false
     var onRefresh: (() -> Void)?
-    private let backend: MacSettingsBackend
+    private let backend: any ObservedSettingsBackend
+    private let defaults: UserDefaults
     private var engine: SettingsEngine?
     @Published private(set) var refreshing = false
     private var storageError: String?
+    private enum Change {
+        case setting(Feature, Bool, Double)
+        case monk(Bool, Double)
+        case restoreAll
+    }
+    private var pendingChanges: [Change] = []
+    private var settledRefresh: Task<Void, Never>?
+    private var intensityRevision = 0
+    private var quitRequested = false
+    private var quitCompletion: (() -> Void)?
+    var hasPendingChanges: Bool { !pendingChanges.isEmpty }
 
-    init(directory: URL) {
-        let defaults = UserDefaults.standard
+    /// Return true when AppKit must defer termination until accepted changes finish.
+    func prepareToQuit(onReady: @escaping () -> Void) -> Bool {
+        quitRequested = true
+        settledRefresh?.cancel()
+        guard busy || hasPendingChanges else { return false }
+        if quitCompletion == nil { quitCompletion = onReady }
+        return true
+    }
+
+    init(directory: URL, backend: (any ObservedSettingsBackend)? = nil,
+        permissions: PermissionManager? = nil, shortcuts: ShortcutManager? = nil,
+        defaults: UserDefaults = .standard) {
+        self.permissions = permissions ?? PermissionManager()
+        self.shortcuts = shortcuts ?? ShortcutManager()
+        self.defaults = defaults
         intensity = defaults.object(forKey: "intensity") == nil ? 0.5 : min(1, max(0, defaults.double(forKey: "intensity")))
-        backend = MacSettingsBackend(directory: directory)
+        self.backend = backend ?? MacSettingsBackend(directory: directory)
         do {
-            engine = try SettingsEngine(backend: backend, store: FileRestoreStore(url: directory.appendingPathComponent("restore.json")))
+            engine = try SettingsEngine(backend: self.backend, store: FileRestoreStore(url: directory.appendingPathComponent("restore.json")))
         } catch {
             storageError = "Could not open the restore file. Settings changes are blocked to preserve it. \(error.localizedDescription)"
             generalError = storageError
         }
         updateJournalState()
-        permissions.onUserCheckFinished = { [weak self] in self?.refresh() }
-        shortcuts.onAction = { [weak self] action in
+        self.permissions.onUserCheckFinished = { [weak self] in self?.refresh() }
+        self.shortcuts.onAction = { [weak self] action in
             guard let self else { return }
             if let feature = action.feature { self.toggle(feature) }
             else { self.toggleMonk() }
         }
     }
 
-    var canChange: Bool { permissions.granted && !permissions.checking && !busy && !refreshing && engine != nil }
+    // Availability is separate from transient work. Actions are serialized below.
+    var canChange: Bool { permissions.granted && engine != nil }
     var canAdjustIntensity: Bool {
         canChange && states[.grayscale]?.available == true && states[.grayscale]?.enabled != nil
     }
-    var canAdjustMenuIntensity: Bool { canAdjustIntensity && states[.grayscale]?.enabled == true }
+    var canAdjustMenuIntensity: Bool { canAdjustIntensity && displayedEnabled(.grayscale) == true }
 
     var summary: FeatureSummary { FeatureSummary(states: states) }
+    var displayedHasSession: Bool { requestedSession ?? hasSession }
+    func displayedEnabled(_ feature: Feature) -> Bool? { requestedValues[feature] ?? states[feature]?.enabled }
     var statusTitle: String {
-        if busy { return "Applying settings…" }
-        if refreshing || permissions.checking { return "Checking settings…" }
+        if states.isEmpty && (refreshing || permissions.checking) { return "Checking settings…" }
         if !permissions.granted { return "Permission required" }
         return summary.title
     }
     var statusDetail: String {
-        if busy { return "The current operation is still in progress." }
-        if refreshing || permissions.checking { return "Reading current macOS settings." }
+        if states.isEmpty && (refreshing || permissions.checking) { return "Reading current macOS settings." }
         if !permissions.granted { return "Allow Automation to read the current settings." }
         return summary.detail
     }
@@ -61,25 +89,39 @@ import MonkShiftCore
     }
 
     func refresh() {
-        guard !refreshing, !busy, !isEditingIntensity else { return }
+        guard !quitRequested, !refreshing, !busy, !isEditingIntensity else { return }
         refreshing = true
-        onRefresh?()
         Task { @MainActor in
-            defer { refreshing = false; onRefresh?() }
+            defer { refreshing = false; onRefresh?(); processChanges() }
             guard await permissions.refresh() else { shortcuts.deactivate(); states.removeAll(); return }
-            guard !busy else { return }
             shortcuts.activate()
-            var current: [Feature: FeatureState] = [:]
-            for feature in Feature.allCases {
-                do { current[feature] = try await backend.read(feature) }
-                catch { current[feature] = FeatureState(enabled: nil, detail: error.localizedDescription, available: false) }
-            }
-            states = current
-            if current[.grayscale]?.enabled == true, !isEditingIntensity,
-               let currentIntensity = try? await backend.intensity() {
-                intensity = currentIntensity
-            }
+            await readCurrentStates()
             updateJournalState()
+        }
+    }
+
+    private func readCurrentStates() async {
+        let previousIntensity = intensity
+        let previousIntensityRevision = intensityRevision
+        var current: [Feature: FeatureState] = [:]
+        for feature in Feature.allCases {
+            do { current[feature] = try await backend.read(feature) }
+            catch { current[feature] = FeatureState(enabled: nil, detail: error.localizedDescription, available: false) }
+        }
+        states = current
+        if current[.grayscale]?.enabled == true,
+           let currentIntensity = try? await backend.intensity(),
+           !isEditingIntensity, intensity == previousIntensity,
+           intensityRevision == previousIntensityRevision, !hasQueuedIntensity {
+            intensity = currentIntensity
+        }
+    }
+
+    private var hasQueuedIntensity: Bool {
+        pendingChanges.dropFirst(busy ? 1 : 0).contains {
+            if case .setting(.grayscale, _, _) = $0 { return true }
+            if case .monk(true, _) = $0 { return true }
+            return false
         }
     }
 
@@ -88,70 +130,113 @@ import MonkShiftCore
         hasIndividualChanges = engine?.hasIndividualChanges ?? false
     }
 
-    private func perform(_ operation: @escaping @MainActor (SettingsEngine) async throws -> [OperationIssue]) {
-        // Every entry point, including shortcuts and menu actions, rechecks permissions.
-        guard !busy, !refreshing, let engine else { return }
-        busy = true
-        generalError = storageError
-        issues = []
+    private func enqueue(_ change: Change) {
+        guard canChange, !quitRequested else { return }
+        settledRefresh?.cancel()
+        pendingChanges.append(change)
+        updateRequestedValues()
         onRefresh?()
-        // Publish progress before starting the asynchronous system operation.
+        processChanges()
+    }
+
+    private func updateRequestedValues() {
+        var values: [Feature: Bool] = [:]
+        var session: Bool?
+        for change in pendingChanges {
+            switch change {
+            case let .setting(feature, enabled, _): values[feature] = enabled
+            case let .monk(enabled, _): session = enabled
+            case .restoreAll: session = false
+            }
+        }
+        requestedValues = values
+        requestedSession = session
+    }
+
+    private func processChanges() {
+        guard !busy, !refreshing, !pendingChanges.isEmpty, let engine else { return }
+        generalError = storageError
+        busy = true
+        onRefresh?()
         Task { @MainActor in
-            await Task.yield()
-            guard await self.permissions.refresh() else {
-                self.shortcuts.deactivate()
-                self.busy = false
-                self.refresh()
+            while !pendingChanges.isEmpty {
+                // The first entry stays queued until read-back completes, so its
+                // requested checkbox value never bounces back to the old value.
+                let change = pendingChanges[0]
+                guard await permissions.refresh() else {
+                    shortcuts.deactivate()
+                    states.removeAll()
+                    pendingChanges.removeAll()
+                    updateRequestedValues()
+                    break
+                }
+                switch change {
+                case let .setting(feature, _, _): issues.removeAll { $0.feature == feature }
+                default: issues = []
+                }
+                do { issues += try await apply(change, using: engine) }
+                catch { generalError = error.localizedDescription }
+                do { try await engine.finishChanges() }
+                catch { generalError = error.localizedDescription }
+                await readCurrentStates()
+                updateJournalState()
+                pendingChanges.removeFirst()
+                updateRequestedValues()
+                onRefresh?()
+            }
+            busy = false
+            onRefresh?()
+            if let completion = quitCompletion {
+                quitCompletion = nil
+                completion()
                 return
             }
-            do { self.issues = try await operation(engine) }
-            catch { self.generalError = error.localizedDescription }
-            do { try await engine.finishChanges() }
-            catch { self.generalError = error.localizedDescription }
-            self.busy = false
-            self.updateJournalState()
-            self.refresh()
-            // One delayed read after macOS has processed changes; no repeating polling.
-            try? await Task.sleep(for: .milliseconds(700))
-            self.refresh()
+            // One coalesced read after the entire queue, cancelled by a new action.
+            settledRefresh = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .milliseconds(700)) }
+                catch { return }
+                self?.refresh()
+            }
+        }
+    }
+
+    private func apply(_ change: Change, using engine: SettingsEngine) async throws -> [OperationIssue] {
+        switch change {
+        case let .setting(feature, enabled, intensity):
+            do { try await engine.set(feature, enabled: enabled, intensity: intensity); return [] }
+            catch { return [OperationIssue(feature, error)] }
+        case let .monk(enabled, intensity):
+            if enabled { return try await engine.enableMonk(intensity: intensity) }
+            return try await engine.restoreMonk()
+        case .restoreAll:
+            var issues = try await engine.restoreMonk()
+            if !engine.hasMonkSession { issues += try await engine.restoreIndividual() }
+            return issues
         }
     }
 
     func toggle(_ feature: Feature) {
-        perform { engine in
-            let state = try await self.backend.read(feature)
-            guard state.available, let enabled = state.enabled else { return [] }
-            do { try await engine.set(feature, enabled: !enabled, intensity: self.intensity); return [] }
-            catch { return [OperationIssue(feature, error)] }
-        }
+        guard let enabled = displayedEnabled(feature) else { return }
+        set(feature, enabled: !enabled)
     }
 
     func set(_ feature: Feature, enabled: Bool) {
-        perform { engine in
-            do { try await engine.set(feature, enabled: enabled, intensity: self.intensity); return [] }
-            catch { return [OperationIssue(feature, error)] }
-        }
+        guard states[feature]?.available == true, states[feature]?.enabled != nil else { return }
+        enqueue(.setting(feature, enabled, intensity))
     }
 
     func toggleMonk() {
-        perform { engine in
-            if engine.hasMonkSession { return try await engine.restoreMonk() }
-            return try await engine.enableMonk(intensity: self.intensity)
-        }
+        enqueue(.monk(!displayedHasSession, intensity))
     }
 
     func commitIntensity() {
-        UserDefaults.standard.set(intensity, forKey: "intensity")
-        if states[.grayscale]?.enabled == true { set(.grayscale, enabled: true) }
+        intensityRevision += 1
+        defaults.set(intensity, forKey: "intensity")
+        if displayedEnabled(.grayscale) == true { set(.grayscale, enabled: true) }
     }
 
     func restoreAll() {
-        perform { engine in
-            var issues = try await engine.restoreMonk()
-            // Preserve ordering: individual settings may predate the Monk session.
-            if !engine.hasMonkSession { issues += try await engine.restoreIndividual() }
-            return issues
-        }
+        enqueue(.restoreAll)
     }
 
     func issue(for feature: Feature) -> String? { issues.first { $0.feature == feature }?.message }
@@ -159,11 +244,11 @@ import MonkShiftCore
 
 #if MONKSHIFT_PREVIEW
     enum PreviewState: String, CaseIterable {
-        case off, allEnabled, monkSession, partiallyEnabled, unknown, unavailable, failed, applying
+        case off, allEnabled, monkSession, partiallyEnabled, unknown, unavailable, failed, applying, refreshing
     }
 
     static func preview(directory: URL, state: PreviewState = .off) -> AppModel {
-        let model = AppModel(directory: directory)
+        let model = AppModel(directory: directory, shortcuts: ShortcutManager(installHandler: false))
         model.permissions.grantForPreview()
         for feature in Feature.allCases {
             model.states[feature] = FeatureState(enabled: false)
@@ -193,6 +278,8 @@ import MonkShiftCore
             model.states[.grayscale] = FeatureState(enabled: nil, detail: "Could not read the current color filter state.")
         case .applying:
             model.busy = true
+        case .refreshing:
+            model.refreshing = true
         }
         return model
     }

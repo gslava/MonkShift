@@ -12,6 +12,15 @@ A minimal native macOS focus utility built with SwiftUI and AppKit. macOS 14 or 
 Fixture previews of the real UI, rendered without changing system settings. They
 show layout and example states, not proof of OS effects. [Automation onboarding](docs/images/permission-light.png).
 
+## Philosophie
+
+Attention is finite. What fills the screen also occupies the mind. MonkShift
+reduces visual distractions so one application, and one task, can take the foreground.
+
+Muted colors bring the screen closer to a newspaper than a glossy magazine.
+The intention is simple: to make the computer feel like a tool for deliberate
+work, with fewer invitations to consume and more room to think.
+
 ## Install with Homebrew
 
 Once the first matching GitHub release and cask are published:

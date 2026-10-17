@@ -21,6 +21,10 @@ Muted colors bring the screen closer to a newspaper than a glossy magazine.
 The intention is simple: to make the computer feel like a tool for deliberate
 work, with fewer invitations to consume and more room to think.
 
+![Before and after Monk Mode: overlapping application windows and a visible Dock on the left; one browser window on a black desktop on the right.](docs/images/monk-mode-before-after.png)
+
+*Real desktop screenshots before and after Monk Mode.*
+
 ## Install with Homebrew
 
 Once the first matching GitHub release and cask are published:

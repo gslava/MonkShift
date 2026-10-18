@@ -27,6 +27,8 @@ test "$MONK_BUNDLE_ICON" = "AppIcon.icns"
 test "$MONK_BUNDLE_MINIMUM" = "14.0"
 test -s "$MONK_VERIFY_APP/Contents/Resources/AppIcon.icns"
 test -s "$MONK_VERIFY_APP/Contents/Resources/LICENSE"
+test -s "$MONK_VERIFY_APP/Contents/Resources/Metadata.appintents/extract.actionsdata"
+test -s "$MONK_VERIFY_APP/Contents/Resources/Metadata.appintents/version.json"
 test -x "$MONK_VERIFY_APP/Contents/MacOS/MonkShift"
 lipo "$MONK_VERIFY_APP/Contents/MacOS/MonkShift" -verify_arch arm64 x86_64
 codesign --verify --strict --all-architectures "$MONK_VERIFY_APP"
@@ -41,4 +43,4 @@ ruby -e '
   abort "Cask checksum does not match archive" unless text.include?(%Q[sha256 "#{ARGV[1]}"])
   abort "Cask version does not match bundle" unless text.include?(%Q[version "#{ARGV[2]}"])
 ' Casks/monkshift.rb "$MONK_EXPECTED_SHA" "$MONK_EXPECTED_VERSION"
-echo "Verified Universal archive, checksum, signature, icon, bundle metadata and cask. App was not launched."
+echo "Verified Universal archive, checksum, signature, icon, bundle/Shortcuts metadata and cask. App was not launched."

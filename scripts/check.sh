@@ -23,6 +23,7 @@ swiftc -parse-as-library -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
 swiftc -parse-as-library -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
     -I "$MONK_CHECK_BIN_DIR/Modules" "$MONK_CHECK_BIN_DIR/MonkShiftCore.build/"*.o \
     Sources/MonkShift/AppModel.swift Sources/MonkShift/PermissionManager.swift Sources/MonkShift/Shortcuts.swift \
+    Sources/MonkShift/MonkModeIntents.swift \
     Sources/MonkShift/System/*.swift Sources/MonkShift/Views/GrayscaleIntensityMenuView.swift \
     Sources/MonkShift/Views/SettingsMenuController.swift Tests/MonkShiftUITests/*.swift \
     -o .build/checks/MonkShiftUIChecks

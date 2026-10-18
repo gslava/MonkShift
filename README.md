@@ -42,7 +42,8 @@ launch it or grant Automation permission.
 
 ## Build and open
 
-Requires Apple's Command Line Tools (`xcode-select --install`) or Xcode. From the project directory:
+Requires full Xcode for Apple Shortcuts metadata. Point `DEVELOPER_DIR` at its
+`Contents/Developer` directory if Command Line Tools are selected. From the project directory:
 
 ```sh
 bash scripts/check.sh
@@ -50,7 +51,18 @@ bash scripts/build-app.sh
 open build/MonkShift.app
 ```
 
-The build produces an ad-hoc signed **Universal app for Apple Silicon and Intel**. Use `bash scripts/build-app.sh --native` for a faster local-only development build. Move the final app to `/Applications` **before granting permission** to keep its path stable. To edit in Xcode, open `Package.swift`; use the build script to produce an app bundle with the required privacy metadata and generated ICNS. No full Xcode installation is needed for the scripts.
+The build produces an ad-hoc signed **Universal app for Apple Silicon and Intel**,
+including metadata for Apple Shortcuts. Use `bash scripts/build-app.sh --native`
+for a faster local-only development build. Move the final app to `/Applications`
+**before granting permission** to keep its path stable. To edit in Xcode, open
+`Package.swift`; use the build script to produce an app bundle with privacy and
+Shortcuts metadata and the generated ICNS.
+
+With Command Line Tools alone, checks and previews still work. Build a local app
+without Apple Shortcuts actions using
+`bash scripts/build-app.sh --native --without-app-shortcuts`. Global keyboard
+shortcuts still work in this build. The standard build fails early when the
+metadata tool is unavailable, preserving the previous app bundle.
 
 `bash scripts/package-release.sh` prepares a Universal ZIP, SHA-256 checksum, release metadata and matching Homebrew cask. `bash scripts/verify-release.sh` verifies the extracted bundle without launching it. These commands do not publish anything. See [DISTRIBUTION.md](docs/DISTRIBUTION.md) for the GitHub release and custom-tap workflow. Developer ID, notarization and App Store distribution are outside this project's workflow.
 
@@ -138,6 +150,31 @@ Shortcuts and the preferred slider position live in the app's UserDefaults domai
 
 Click **Shortcuts…** and then **Edit…** to choose modifiers and a letter. The app validates duplicates and OS registration errors, retaining the previous working shortcut on a failed edit. Keys use physical ANSI positions so the same combination works across input languages. As with other Carbon shortcuts, secure input/system-reserved combinations may prevent delivery. Shortcuts work while MonkShift is running, even with its window closed or menu bar auto-hidden.
 
+## Apple Shortcuts
+
+A standard build exposes three actions in the macOS **Shortcuts** app. Create a
+shortcut, search for **MonkShift**, and add one of these actions:
+
+| Action | Behavior |
+| --- | --- |
+| Toggle Monk Mode | Enable when there is no saved session; otherwise restore that session. |
+| Enable Monk Mode | Apply Monk Mode; repeated runs preserve the original session baseline. |
+| Disable Monk Mode | Restore the saved session. With no session, leave settings unchanged. |
+
+For a keyboard toggle, add **Toggle Monk Mode** to a shortcut and assign a keyboard
+shortcut in its details. These actions open MonkShift when needed. They use the
+same queue and restore journal as the app's controls, wait for their operation
+and read-back to finish, and report permission, storage, partial-apply and restore
+errors to Shortcuts. Retrying **Disable Monk Mode** restores any remaining failed
+records. Disable restores the saved baseline; settings that were enabled before
+the session can remain enabled afterward.
+
+Install the final bundle in `/Applications`, open it once and grant Automation
+permission before using these actions. A shortcut does not request consent on
+your behalf. Builds made with `--without-app-shortcuts` omit the discovery
+metadata and do not expose these actions. See Apple's
+[App Shortcuts documentation](https://developer.apple.com/documentation/appintents/app-shortcuts).
+
 ## Memory design
 
 The idle process retains one small model, native NSStatusItem/NSMenu, and Carbon shortcut registrations. Closing the window releases its SwiftUI hosting tree. There are no repeated timers, live previews, third-party frameworks, web views or helper daemons. macOS system processes such as Dock and universalaccessd are managed by macOS, not resident MonkShift helpers.
@@ -159,12 +196,15 @@ permission failures suggest changing Automation access. These checks use tempora
 files, short-lived test subprocesses and a fake event transport; no real Apple
 Events are sent.
 
-Fourteen UI checks use the actual app model and native menu with fake settings and
+Twenty-four UI/intent checks use the actual app model and native menu with fake settings and
 permissions, isolated preferences/storage, and global shortcuts disabled. They
 cover input during refresh, rapid toggles, failed-change recovery, captured slider
 values, in-flight intensity reads, finalization errors, permission revocation,
 native menu/slider identity, stable Quit availability, queued restoration and
-deferred shutdown while changes or a refresh are pending.
+deferred shutdown while changes or a refresh are pending. The ten intent checks
+also cover all three actions, repeated enables, completion/read-back ordering,
+initial refresh, denied/revoked permission, partial apply/restore errors,
+finalization failure and startup/shutdown behavior.
 No real Apple Events, privacy prompts or system-setting writes are performed.
 
 `bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
@@ -181,10 +221,11 @@ Manual acceptance checks on **both macOS 14 and macOS 15**:
 - Change an individual setting, start Monk Mode, edit another setting, disable Monk Mode, then Restore All; verify baseline ordering.
 - Test wallpaper restoration with multiple displays, a temporarily disconnected display, and separate desktop Spaces. Confirm documented scope.
 - Edit and use all four shortcuts from another app. Try duplicates and a shortcut registered by another app; confirm errors preserve the previous assignment.
+- With a full-Xcode build installed in `/Applications`, open Shortcuts and find all three MonkShift actions. Run Toggle with MonkShift quit, then again while it is running; confirm the saved baseline is restored. Repeat Enable twice, then Disable twice. Test a revoked Automation permission and a partial restore failure: Shortcuts must report an error and the restore records must remain retryable. Verify discovery and execution on macOS 14 and the current macOS; compiler/fixture checks do not prove system registration.
 - Inspect light/dark mode, keyboard navigation, VoiceOver labels, minimum window size and scrolling. Closing the window leaves menu bar control available.
 - Measure idle CPU/memory using the release build after closing the window.
 
-The build scripts do not launch MonkShift or change system settings. Real permission prompts, visual OS effects, macOS 14 behavior, global shortcut delivery and idle RAM remain manual verification gates until tested in an intentional app session.
+The build scripts do not launch MonkShift or change system settings. Real permission prompts, visual OS effects, macOS 14 behavior, global shortcut delivery, Apple Shortcuts discovery/cold launch and idle RAM remain manual verification gates until tested in an intentional app session. App Intents metadata extraction requires full Xcode and cannot be validated with Command Line Tools alone.
 
 ## Source references
 

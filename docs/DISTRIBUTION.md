@@ -6,7 +6,9 @@ There is no Apple Developer ID or notarization in this workflow.
 
 ## Prepare an archive
 
-Run from the project root on a Mac with Apple Command Line Tools:
+Run from the project root on a Mac with full Xcode selected (or set
+`DEVELOPER_DIR` to Xcode's `Contents/Developer` directory). The release requires
+`appintentsmetadataprocessor`, which is absent from standalone Command Line Tools:
 
 ```sh
 bash scripts/check.sh
@@ -14,7 +16,8 @@ bash scripts/render-previews.sh --readme
 bash scripts/package-release.sh
 ```
 
-Packaging builds both architectures, generates the ICNS, signs the complete app
+Packaging builds both architectures, generates the ICNS and Apple Shortcuts
+metadata, signs the complete app
 ad-hoc, verifies the signature, and creates these files for the version in
 `Resources/Info.plist`:
 
@@ -36,7 +39,9 @@ bash scripts/verify-release.sh
 
 Verification checks the ZIP checksum before extracting into a temporary build
 directory, then checks both executable slices, app metadata, ICNS, license,
-ad-hoc signature and matching cask version/checksum. It does not execute the app.
+ad-hoc signature, Apple Shortcuts metadata and matching cask version/checksum. It
+does not execute the app. A development build using `--without-app-shortcuts`
+cannot pass release verification.
 
 ## Publish the prepared files
 

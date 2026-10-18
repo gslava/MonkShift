@@ -44,6 +44,8 @@ import MonkShiftCore
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = AppModel(directory: directory)
+        MonkModeIntentHandler.shared.model = model
+        MonkShiftAppShortcuts.updateAppShortcutParameters()
         reopenObserver = DistributedNotificationCenter.default().addObserver(forName: Self.reopenNotification,
             object: String(getuid()), queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.showWindow(nil) }

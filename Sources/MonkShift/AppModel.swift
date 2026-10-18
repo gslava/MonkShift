@@ -25,7 +25,11 @@ import MonkShiftCore
         case monk(Bool, Double)
         case restoreAll
     }
-    private var pendingChanges: [Change] = []
+    private struct PendingChange {
+        let change: Change
+        let completion: ((Result<Void, Error>) -> Void)?
+    }
+    private var pendingChanges: [PendingChange] = []
     private var settledRefresh: Task<Void, Never>?
     private var intensityRevision = 0
     private var quitRequested = false
@@ -119,8 +123,8 @@ import MonkShiftCore
 
     private var hasQueuedIntensity: Bool {
         pendingChanges.dropFirst(busy ? 1 : 0).contains {
-            if case .setting(.grayscale, _, _) = $0 { return true }
-            if case .monk(true, _) = $0 { return true }
+            if case .setting(.grayscale, _, _) = $0.change { return true }
+            if case .monk(true, _) = $0.change { return true }
             return false
         }
     }
@@ -130,10 +134,13 @@ import MonkShiftCore
         hasIndividualChanges = engine?.hasIndividualChanges ?? false
     }
 
-    private func enqueue(_ change: Change) {
-        guard canChange, !quitRequested else { return }
+    private func enqueue(_ change: Change, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        guard canChange, !quitRequested else {
+            completion?(.failure(MonkError(storageError ?? "Open MonkShift and grant Automation permission before running this action. If MonkShift is quitting, reopen it first.")))
+            return
+        }
         settledRefresh?.cancel()
-        pendingChanges.append(change)
+        pendingChanges.append(PendingChange(change: change, completion: completion))
         updateRequestedValues()
         onRefresh?()
         processChanges()
@@ -142,8 +149,8 @@ import MonkShiftCore
     private func updateRequestedValues() {
         var values: [Feature: Bool] = [:]
         var session: Bool?
-        for change in pendingChanges {
-            switch change {
+        for pending in pendingChanges {
+            switch pending.change {
             case let .setting(feature, enabled, _): values[feature] = enabled
             case let .monk(enabled, _): session = enabled
             case .restoreAll: session = false
@@ -162,27 +169,40 @@ import MonkShiftCore
             while !pendingChanges.isEmpty {
                 // The first entry stays queued until read-back completes, so its
                 // requested checkbox value never bounces back to the old value.
-                let change = pendingChanges[0]
+                let pending = pendingChanges[0]
+                let change = pending.change
                 guard await permissions.refresh() else {
                     shortcuts.deactivate()
                     states.removeAll()
+                    let cancelled = pendingChanges
                     pendingChanges.removeAll()
                     updateRequestedValues()
+                    for pending in cancelled {
+                        pending.completion?(.failure(MonkError("Open MonkShift and grant Automation permission, then run the shortcut again.")))
+                    }
                     break
                 }
                 switch change {
                 case let .setting(feature, _, _): issues.removeAll { $0.feature == feature }
                 default: issues = []
                 }
-                do { issues += try await apply(change, using: engine) }
-                catch { generalError = error.localizedDescription }
+                var failure: Error?
+                do {
+                    let operationIssues = try await apply(change, using: engine)
+                    issues += operationIssues
+                    if !operationIssues.isEmpty {
+                        failure = MonkError(operationIssues.map { "\($0.feature.title): \($0.message)" }.joined(separator: "\n"))
+                    }
+                } catch { generalError = error.localizedDescription; failure = error }
                 do { try await engine.finishChanges() }
-                catch { generalError = error.localizedDescription }
+                catch { generalError = error.localizedDescription; failure = error }
                 await readCurrentStates()
                 updateJournalState()
                 pendingChanges.removeFirst()
                 updateRequestedValues()
                 onRefresh?()
+                if let failure { pending.completion?(.failure(failure)) }
+                else { pending.completion?(.success(())) }
             }
             busy = false
             onRefresh?()
@@ -227,6 +247,28 @@ import MonkShiftCore
 
     func toggleMonk() {
         enqueue(.monk(!displayedHasSession, intensity))
+    }
+
+    /// Return only after this command's mutation, persistence and read-back finish.
+    func performMonkMode(_ command: MonkModeCommand) async throws {
+        guard !quitRequested else { throw MonkError("MonkShift is quitting. Reopen it before running the shortcut.") }
+        guard engine != nil else { throw MonkError(storageError ?? "The restore file is unavailable.") }
+        guard await permissions.refresh() else {
+            shortcuts.deactivate()
+            states.removeAll()
+            onRefresh?()
+            throw MonkError("Open MonkShift and grant Automation permission, then run the shortcut again.")
+        }
+        try Task.checkCancellation()
+        let enabled: Bool
+        switch command {
+        case .toggle: enabled = !displayedHasSession
+        case .enable: enabled = true
+        case .disable: enabled = false
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            enqueue(.monk(enabled, intensity)) { continuation.resume(with: $0) }
+        }
     }
 
     func commitIntensity() {

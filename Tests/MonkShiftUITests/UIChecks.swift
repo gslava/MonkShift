@@ -23,6 +23,7 @@ private func require(_ condition: Bool, _ message: String) throws {
     var changes: [String] = []
     var intensities: [Double] = []
     var failFeature: Feature?
+    var failRestoreFeature: Feature?
     var holdRead = false
     var holdApply = false
     var holdIntensity = false
@@ -64,6 +65,7 @@ private func require(_ condition: Bool, _ message: String) throws {
     }
     func disable(_ feature: Feature) async throws { values[feature] = false; changes.append("disable:\(feature.rawValue)") }
     func restore(_ feature: Feature, from data: Data) async throws {
+        if failRestoreFeature == feature { throw MonkError("Fixture restore failed") }
         values[feature] = try JSONDecoder().decode(Bool.self, from: data)
         changes.append("restore:\(feature.rawValue)")
     }
@@ -131,7 +133,17 @@ private func require(_ condition: Bool, _ message: String) throws {
             ("Quit waits for input queued during refresh", testQuitDuringRefresh),
             ("Quit completes when permission cancels the queue", testQuitAfterRevocation),
             ("Idle Quit needs no deferred completion", testIdleQuit),
-            ("Queued Monk Mode and Restore All preserve the baseline", testModeAndRestore)
+            ("Queued Monk Mode and Restore All preserve the baseline", testModeAndRestore),
+            ("App Intents enable, toggle and disable the saved session", testAppIntentActions),
+            ("Repeated intent enable preserves the original baseline", testIntentRepeatedEnable),
+            ("Intent completion waits for mutation and read-back", testIntentWaitsForCompletion),
+            ("Intent during initial refresh waits for the existing queue", testIntentDuringRefresh),
+            ("Intent permission failure is reported without mutations", testIntentPermissionFailure),
+            ("Permission revocation completes queued intents with an error", testIntentQueuedRevocation),
+            ("Intent apply errors are returned and remain recoverable", testIntentApplyFailure),
+            ("Intent restore failures retain records for retry", testIntentRestoreFailure),
+            ("Intent finalization failure is returned to its caller", testIntentFinalizationFailure),
+            ("Intents fail cleanly during startup and shutdown", testIntentLifecycle)
         ]
         var failures = 0
         for (name, check) in checks {
@@ -376,5 +388,149 @@ private func require(_ condition: Bool, _ message: String) throws {
         let journal = try FileRestoreStore(url: f.directory.appendingPathComponent("restore.json")).load()
         try require(journal.monk.isEmpty && journal.individual.isEmpty, "Queued restores left stale journal entries")
         try require(f.backend.values.values.allSatisfy { !$0 } && !f.model.hasSession, "Queued operations did not restore the original baseline")
+    }
+
+    @MainActor private static func failureMessage(_ operation: () async throws -> Void) async throws -> String {
+        do { try await operation() }
+        catch { return error.localizedDescription }
+        throw UIFailure(description: "Expected the shortcut to report a failure")
+    }
+
+    @MainActor private static func testAppIntentActions() async throws {
+        let f = Fixture(); defer { f.close(); MonkModeIntentHandler.shared.model = nil }
+        try await f.start()
+        MonkModeIntentHandler.shared.model = f.model
+        _ = try await EnableMonkModeIntent().perform()
+        try require(f.model.hasSession && f.backend.values.values.allSatisfy { $0 }, "Enable intent did not apply Monk Mode")
+        _ = try await ToggleMonkModeIntent().perform()
+        try require(!f.model.hasSession && f.backend.values.values.allSatisfy { !$0 }, "Toggle intent did not restore the session")
+        _ = try await ToggleMonkModeIntent().perform()
+        try require(f.model.hasSession, "Toggle intent did not enable a new session")
+        _ = try await DisableMonkModeIntent().perform()
+        let changes = f.backend.changes
+        _ = try await DisableMonkModeIntent().perform()
+        try require(!f.model.hasSession && f.backend.values.values.allSatisfy { !$0 } && f.backend.changes == changes,
+            "Disable intent changed settings without a saved session")
+    }
+
+    @MainActor private static func testIntentRepeatedEnable() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.values[.hideDock] = true
+        try await f.start()
+        try await f.model.performMonkMode(.enable)
+        let original = try FileRestoreStore(url: f.directory.appendingPathComponent("restore.json")).load()
+        try await f.model.performMonkMode(.enable)
+        let saved = try FileRestoreStore(url: f.directory.appendingPathComponent("restore.json")).load()
+        try require(original == saved && f.model.hasSession, "Repeated enable toggled off or replaced the original snapshot")
+        try await f.model.performMonkMode(.disable)
+        try require(f.backend.values[.hideDock] == true && f.backend.values[.hideMenuBar] == false,
+            "Disable did not restore the pre-session baseline")
+    }
+
+    @MainActor private static func testIntentWaitsForCompletion() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.backend.holdApply = true
+        var completed = false
+        let action = Task { @MainActor in
+            try await f.model.performMonkMode(.enable)
+            completed = true
+        }
+        try await until { f.backend.blockedApply != nil }
+        try require(!completed, "Intent reported success before the system mutation finished")
+        f.backend.holdRead = true
+        f.backend.releaseApply()
+        try await until { f.backend.blockedRead != nil }
+        try require(!completed, "Intent reported success before read-back finished")
+        f.backend.releaseRead()
+        try await action.value
+        try require(completed && f.model.hasSession && f.model.states[.hideDock]?.enabled == true,
+            "Intent completed without updating the saved and observed state")
+    }
+
+    @MainActor private static func testIntentDuringRefresh() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.holdRead = true
+        f.model.refresh()
+        try await until { f.backend.blockedRead != nil }
+        let action = Task { @MainActor in try await f.model.performMonkMode(.toggle) }
+        try await until { f.model.requestedSession == true }
+        try require(f.backend.changes.isEmpty, "Intent interleaved mutations with initial refresh")
+        f.backend.releaseRead()
+        try await action.value
+        try require(f.model.hasSession, "Intent was lost during startup refresh")
+    }
+
+    @MainActor private static func testIntentPermissionFailure() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.permission.result = OSStatus(errAEEventWouldRequireUserConsent)
+        let message = try await failureMessage { try await f.model.performMonkMode(.toggle) }
+        try require(message.contains("Automation permission") && f.backend.changes.isEmpty && !f.model.hasPendingChanges,
+            "Denied intent changed settings, stayed queued or failed without onboarding guidance")
+    }
+
+    @MainActor private static func testIntentQueuedRevocation() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.backend.holdApply = true
+        let enable = Task { @MainActor in try await f.model.performMonkMode(.enable) }
+        try await until { f.backend.blockedApply != nil }
+        let disable = Task { @MainActor in
+            try await failureMessage { try await f.model.performMonkMode(.disable) }
+        }
+        try await until { f.model.requestedSession == false }
+        f.permission.result = OSStatus(errAEEventNotPermitted)
+        f.backend.releaseApply()
+        try await enable.value
+        let message = try await disable.value
+        try require(message.contains("Automation permission") && f.model.hasSession && !f.model.hasPendingChanges,
+            "Revoked intent succeeded, lost its restore records or never completed")
+        try require(!f.backend.changes.contains { $0.hasPrefix("restore:") }, "Revoked intent restored settings")
+    }
+
+    @MainActor private static func testIntentApplyFailure() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.backend.failFeature = .hideDock
+        let message = try await failureMessage { try await f.model.performMonkMode(.enable) }
+        try require(message.contains("Fixture write failed") && f.model.hasSession, "Partial apply was reported as success or lost its session")
+        f.backend.failFeature = nil
+        try await f.model.performMonkMode(.disable)
+        try require(!f.model.hasSession && f.backend.values.values.allSatisfy { !$0 }, "Failed enable was not recoverable")
+    }
+
+    @MainActor private static func testIntentRestoreFailure() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        try await f.model.performMonkMode(.enable)
+        f.backend.failRestoreFeature = .hideDock
+        let message = try await failureMessage { try await f.model.performMonkMode(.disable) }
+        let journal = try FileRestoreStore(url: f.directory.appendingPathComponent("restore.json")).load()
+        try require(message.contains("Fixture restore failed") && journal.monk.count == 1 && journal.monk[Feature.hideDock.rawValue] != nil,
+            "Failed restore was reported as success or its retry record was lost")
+        f.backend.failRestoreFeature = nil
+        try await f.model.performMonkMode(.disable)
+        try require(!f.model.hasSession && f.backend.values.values.allSatisfy { !$0 }, "Disable retry did not finish restoration")
+    }
+
+    @MainActor private static func testIntentFinalizationFailure() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.backend.failFinishOnce = true
+        let message = try await failureMessage { try await f.model.performMonkMode(.enable) }
+        try require(message.contains("Fixture finalization failed") && f.model.hasSession,
+            "Finalization failure was reported as success or lost the restore session")
+    }
+
+    @MainActor private static func testIntentLifecycle() async throws {
+        let handler = MonkModeIntentHandler()
+        let startup = try await failureMessage { try await handler.perform(.toggle) }
+        try require(startup.contains("starting"), "Missing app model was not reported")
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        handler.model = f.model
+        _ = f.model.prepareToQuit {}
+        let shutdown = try await failureMessage { try await handler.perform(.toggle) }
+        try require(shutdown.contains("quitting") && f.backend.changes.isEmpty, "Intent changed settings during shutdown")
     }
 }

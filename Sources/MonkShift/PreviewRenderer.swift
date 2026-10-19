@@ -44,7 +44,7 @@ import SwiftUI
     }
 
     @MainActor private static func render<V: View>(_ view: V, name: String, output: URL, dark: Bool,
-        size: NSSize = NSSize(width: 560, height: 760)) throws {
+        size: NSSize = NSSize(width: 560, height: 800)) throws {
         let hosting = NSHostingView(rootView: view.frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)

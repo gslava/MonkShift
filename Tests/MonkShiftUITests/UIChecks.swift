@@ -143,7 +143,8 @@ private func require(_ condition: Bool, _ message: String) throws {
             ("Intent apply errors are returned and remain recoverable", testIntentApplyFailure),
             ("Intent restore failures retain records for retry", testIntentRestoreFailure),
             ("Intent finalization failure is returned to its caller", testIntentFinalizationFailure),
-            ("Intents fail cleanly during startup and shutdown", testIntentLifecycle)
+            ("Intents fail cleanly during startup and shutdown", testIntentLifecycle),
+            ("Reduce Motion menu control and Monk Mode share restoration", testReduceMotionMenuControl)
         ]
         var failures = 0
         for (name, check) in checks {
@@ -394,6 +395,28 @@ private func require(_ condition: Bool, _ message: String) throws {
         do { try await operation() }
         catch { return error.localizedDescription }
         throw UIFailure(description: "Expected the shortcut to report a failure")
+    }
+
+    @MainActor private static func testReduceMotionMenuControl() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        let controller = SettingsMenuController(model: f.model, showWindow: {}, quit: {})
+        f.model.onRefresh = { [weak controller] in controller?.update() }
+        guard let row = controller.menu.items.first(where: { $0.representedObject as? String == Feature.reduceMotion.rawValue }),
+              let action = row.action else { throw UIFailure(description: "Reduce Motion menu control is missing") }
+        try require(row.title == "Reduce Motion" && row.state == .off && row.isEnabled, "Reduce Motion menu state is incorrect")
+        try require(NSApp.sendAction(action, to: row.target, from: row), "Reduce Motion menu action was not handled")
+        try await until { !f.model.busy }
+        try require(f.backend.values[.reduceMotion] == true && row.state == .on && !f.model.hasSession,
+            "Individual Reduce Motion control did not update independently")
+        try await f.model.performMonkMode(.enable)
+        try await f.model.performMonkMode(.disable)
+        try require(f.backend.values[.reduceMotion] == true && row.state == .on,
+            "Disabling Monk Mode overwrote the earlier individual Reduce Motion setting")
+        f.model.restoreAll()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.reduceMotion] == false && row.state == .off,
+            "Restore All did not restore the original Reduce Motion baseline")
     }
 
     @MainActor private static func testAppIntentActions() async throws {

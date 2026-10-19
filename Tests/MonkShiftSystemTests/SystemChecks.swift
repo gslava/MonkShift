@@ -32,7 +32,9 @@ func require(_ condition: Bool, _ message: String) throws {
             ("Read/write commands match the macOS scripting dictionary", SystemEventsChecks.testCommandsMatchScriptingDictionary),
             ("Slow system reply leaves main actor responsive", { try await SystemEventsChecks.testMainActorRemainsResponsive() }),
             ("System event transport is serialized", SystemEventsChecks.testTransportIsSerialized),
-            ("Unknown, denied and timed out replies fail honestly", SystemEventsChecks.testUnknownAndErrorRepliesAreRejected)
+            ("Unknown, denied and timed out replies fail honestly", SystemEventsChecks.testUnknownAndErrorRepliesAreRejected),
+            ("Reduce Motion restores enabled and disabled baselines", ReduceMotionChecks.testSetAndRestore),
+            ("Rejected Reduce Motion writes are reported", ReduceMotionChecks.testRejectedWritesAreReported)
         ]
         var failures = 0
         for (name, test) in tests {

@@ -8,6 +8,7 @@ actor PreferencesWorker {
     private let windowManager = "com.apple.WindowManager"
     private var dockNeedsReload = false
     private lazy var colorFilter = Result { try ColorFilterAPI() }
+    private lazy var reduceMotion = Result { try ReduceMotionAPI() }
 
     private func value(_ domain: String, _ key: String) -> Any? {
         CFPreferencesSynchronize(domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
@@ -47,6 +48,8 @@ actor PreferencesWorker {
         case .oneWindowAtATime:
             return FeatureState(enabled: (value(windowManager, "AppWindowGroupingBehavior") as? NSNumber)?.boolValue ?? false,
                 detail: "Takes effect while Stage Manager is on.")
+        case .reduceMotion:
+            return FeatureState(enabled: try reduceMotion.get().read())
         case .grayscale:
             let state = try colorFilter.get().read()
             return FeatureState(enabled: state.enabled && state.type == 1)
@@ -62,6 +65,7 @@ actor PreferencesWorker {
             return try PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
         }
         if feature == .grayscale { return try JSONEncoder().encode(colorFilter.get().read()) }
+        if feature == .reduceMotion { return try JSONEncoder().encode(reduceMotion.get().read()) }
         throw MonkError("Could not capture preference keys for \(feature.title).")
     }
 
@@ -75,6 +79,7 @@ actor PreferencesWorker {
             try write(windowManager, "GloballyEnabled", true)
         case .hideRecentApps: try write(windowManager, "AutoHide", true)
         case .oneWindowAtATime: try write(windowManager, "AppWindowGroupingBehavior", 1)
+        case .reduceMotion: try reduceMotion.get().set(enabled: true)
         case .grayscale: try colorFilter.get().apply(intensity: intensity)
         default: throw MonkError("\(feature.title) does not use the preferences backend.")
         }
@@ -88,6 +93,7 @@ actor PreferencesWorker {
         case .stageManager: try write(windowManager, "GloballyEnabled", false)
         case .hideRecentApps: try write(windowManager, "AutoHide", false)
         case .oneWindowAtATime: try write(windowManager, "AppWindowGroupingBehavior", 0)
+        case .reduceMotion: try reduceMotion.get().set(enabled: false)
         case .grayscale: try colorFilter.get().disable()
         default: throw MonkError("\(feature.title) does not use the preferences backend.")
         }
@@ -106,6 +112,8 @@ actor PreferencesWorker {
             }
         } else if feature == .grayscale {
             try colorFilter.get().restore(JSONDecoder().decode(ColorFilterAPI.State.self, from: data))
+        } else if feature == .reduceMotion {
+            try reduceMotion.get().set(enabled: JSONDecoder().decode(Bool.self, from: data))
         } else { throw MonkError("Could not restore preference keys for \(feature.title).") }
     }
 

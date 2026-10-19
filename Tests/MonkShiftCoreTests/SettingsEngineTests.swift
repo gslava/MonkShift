@@ -46,6 +46,52 @@ import MonkShiftCore
 }
 
 @MainActor final class SettingsEngineTests {
+    func testReduceMotionSessionRestoresBothOriginalStates() async throws {
+        for originallyEnabled in [false, true] {
+            let backend = FakeBackend(), store = MemoryStore()
+            let original = originallyEnabled ? backend.applied : backend.initial
+            backend.values[.reduceMotion] = original
+            let engine = try SettingsEngine(backend: backend, store: store)
+            _ = try await engine.enableMonk(intensity: 0.5)
+            await expectEqual(store.journal.monk[Feature.reduceMotion.rawValue], original)
+            await expectTrue(try backend.read(.reduceMotion).enabled == true)
+            _ = try await engine.restoreMonk()
+            await expectEqual(backend.values[.reduceMotion], original)
+            await expectFalse(engine.hasMonkSession)
+        }
+    }
+
+    func testReduceMotionRestoreFailureSurvivesFileStoreRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReduceMotionChecks-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let backend = FakeBackend()
+        let url = directory.appendingPathComponent("restore.json")
+        let engine = try SettingsEngine(backend: backend, store: FileRestoreStore(url: url))
+        _ = try await engine.enableMonk(intensity: 0.5)
+        backend.failRestore = [.reduceMotion]
+        await expectEqual(try await engine.restoreMonk().map(\.feature), [.reduceMotion])
+        let restarted = try SettingsEngine(backend: backend, store: FileRestoreStore(url: url))
+        await expectEqual(Set(restarted.journal.monk.keys), [Feature.reduceMotion.rawValue])
+        backend.failRestore = []
+        await expectTrue(try await restarted.restoreMonk().isEmpty)
+        await expectEqual(backend.values[.reduceMotion], backend.initial)
+        await expectFalse(restarted.hasMonkSession)
+    }
+
+    func testLegacySessionLeavesReduceMotionUntouched() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        backend.values[.reduceMotion] = backend.applied
+        for feature in Feature.allCases where feature != .reduceMotion {
+            store.journal.monk[feature.rawValue] = backend.initial
+            backend.values[feature] = backend.applied
+        }
+        let engine = try SettingsEngine(backend: backend, store: store)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+        await expectEqual(backend.values[.reduceMotion], backend.applied)
+        await expectEqual(backend.writes, Feature.allCases.count - 1)
+        await expectFalse(engine.hasMonkSession)
+    }
+
     func testAllSnapshotsPersistBeforeFirstMutation() async throws {
         let backend = FakeBackend(), store = MemoryStore()
         backend.unavailable = [.stageManager]

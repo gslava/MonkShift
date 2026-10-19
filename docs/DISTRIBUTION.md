@@ -55,6 +55,10 @@ verification. Custom paths are accepted as `[archive.zip] [image.dmg]`.
 
 `.github/workflows/release.yml` runs on pushes of `v*` tags. The selected behavior
 is automatic publication after verification, without a manual approval step.
+To retry an existing tag whose push did not start a run, use **Actions → Release
+→ Run workflow** on `main` and enter the tag. The workflow checks out that exact
+tag, validates it and follows the same build/publish steps; it does not retag the
+commit. This also works for a tag created before the retry trigger was added.
 
 1. Set `CFBundleShortVersionString` in `Resources/Info.plist` to the release's
    numeric `major.minor.patch` version, and advance `CFBundleVersion` for an update.

@@ -18,6 +18,11 @@ MONK_ARCHIVE="$PWD/dist/$MONK_ARCHIVE_NAME"
 ditto -c -k --sequesterRsrc --keepParent build/MonkShift.app "$MONK_ARCHIVE"
 MONK_RELEASE_SHA="$(shasum -a 256 "$MONK_ARCHIVE" | awk '{print $1}')"
 printf '%s  %s\n' "$MONK_RELEASE_SHA" "$MONK_ARCHIVE_NAME" > "$MONK_ARCHIVE.sha256"
+MONK_DMG_NAME="MonkShift-$MONK_RELEASE_VERSION-universal.dmg"
+MONK_DMG="$PWD/dist/$MONK_DMG_NAME"
+bash scripts/create-dmg.sh build/MonkShift.app "$MONK_DMG"
+MONK_DMG_SHA="$(shasum -a 256 "$MONK_DMG" | awk '{print $1}')"
+printf '%s  %s\n' "$MONK_DMG_SHA" "$MONK_DMG_NAME" > "$MONK_DMG.sha256"
 cat > Casks/monkshift.rb <<RUBY
 cask "monkshift" do
   version "$MONK_RELEASE_VERSION"
@@ -43,6 +48,7 @@ cask "monkshift" do
   EOS
 end
 RUBY
+cp Casks/monkshift.rb dist/monkshift.rb
 cat > dist/release.json <<JSON
 {
   "version": "$MONK_RELEASE_VERSION",
@@ -51,13 +57,19 @@ cat > dist/release.json <<JSON
   "archive": "$MONK_ARCHIVE_NAME",
   "sha256": "$MONK_RELEASE_SHA",
   "url": "https://github.com/$MONK_REPOSITORY/releases/download/v$MONK_RELEASE_VERSION/$MONK_ARCHIVE_NAME",
+  "dmg": {
+    "archive": "$MONK_DMG_NAME",
+    "sha256": "$MONK_DMG_SHA",
+    "url": "https://github.com/$MONK_REPOSITORY/releases/download/v$MONK_RELEASE_VERSION/$MONK_DMG_NAME"
+  },
   "architectures": ["arm64", "x86_64"],
   "minimum_macos": "14.0",
   "signature": "ad-hoc",
   "notarized": false
 }
 JSON
-bash scripts/verify-release.sh "$MONK_ARCHIVE"
+bash scripts/verify-release.sh "$MONK_ARCHIVE" "$MONK_DMG"
 echo "Prepared: $MONK_ARCHIVE"
+echo "Prepared: $MONK_DMG"
 echo "Cask: $PWD/Casks/monkshift.rb"
 echo "Nothing has been uploaded or published."

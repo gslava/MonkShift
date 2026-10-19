@@ -25,6 +25,17 @@ work, with fewer invitations to consume and more room to think.
 
 *Real desktop screenshots before and after Monk Mode.*
 
+## Install from GitHub Releases
+
+Published versions provide a **Universal DMG** for Apple Silicon and Intel on
+macOS 14 or later in [Releases](https://github.com/gslava/MonkShift/releases).
+Open the DMG, drag **MonkShift.app** onto **Applications**, then eject the image.
+A ZIP of the same app and SHA-256 checksums are also attached.
+
+Pushing a `v<major>.<minor>.<patch>` tag automatically runs checks, builds with full
+Xcode and publishes a release after verification. The tag must match the version
+in `Resources/Info.plist`. See the [release instructions](docs/DISTRIBUTION.md).
+
 ## Install with Homebrew
 
 Once the first matching GitHub release and cask are published:
@@ -64,7 +75,14 @@ without Apple Shortcuts actions using
 shortcuts still work in this build. The standard build fails early when the
 metadata tool is unavailable, preserving the previous app bundle.
 
-`bash scripts/package-release.sh` prepares a Universal ZIP, SHA-256 checksum, release metadata and matching Homebrew cask. `bash scripts/verify-release.sh` verifies the extracted bundle without launching it. These commands do not publish anything. See [DISTRIBUTION.md](docs/DISTRIBUTION.md) for the GitHub release and custom-tap workflow. Developer ID, notarization and App Store distribution are outside this project's workflow.
+`bash scripts/package-release.sh` prepares Universal DMG and ZIP files, SHA-256
+checksums, release metadata and a matching Homebrew cask.
+`bash scripts/verify-release.sh` verifies both downloads, mounts the DMG read-only
+without opening Finder, compares the apps and ejects it without launching the app.
+These local commands do not publish anything. The tag-triggered GitHub Actions
+workflow publishes the verified files automatically. See
+[DISTRIBUTION.md](docs/DISTRIBUTION.md) for release and custom-tap instructions.
+Developer ID, notarization and App Store distribution are outside this workflow.
 
 ## Permission and privacy
 

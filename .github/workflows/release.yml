@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MONK_TAG: ${{ github.ref_name }}
+      MONKSHIFT_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate release version and Xcode
+        run: |
+          bash scripts/check-release-tag.sh "$MONK_TAG"
+          xcodebuild -version
+          xcrun --find appintentsmetadataprocessor
+      - name: Run offline checks
+        run: bash scripts/check.sh
+      - name: Build and verify Universal DMG and ZIP
+        run: |
+          bash scripts/package-release.sh
+          cp .github/RELEASE_NOTES.md dist/release-notes.md
+      - name: Save verified release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      MONK_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download verified release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-files
+          path: dist
+      - name: Verify transferred checksums and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          MONK_STEM="MonkShift-${MONK_TAG#v}-universal"
+          (cd dist && sha256sum -c "$MONK_STEM.zip.sha256" "$MONK_STEM.dmg.sha256")
+          gh release create "$MONK_TAG" \
+            "dist/$MONK_STEM.dmg" "dist/$MONK_STEM.dmg.sha256" \
+            "dist/$MONK_STEM.zip" "dist/$MONK_STEM.zip.sha256" \
+            dist/release.json dist/monkshift.rb \
+            --verify-tag --title "MonkShift ${MONK_TAG#v}" \
+            --notes-file dist/release-notes.md --generate-notes

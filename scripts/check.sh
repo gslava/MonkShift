@@ -15,7 +15,8 @@ MONK_CHECK_BIN_DIR="$(swift build --disable-sandbox --cache-path .build/cache --
 swiftc -parse-as-library -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
     -I "$MONK_CHECK_BIN_DIR/Modules" "$MONK_CHECK_BIN_DIR/MonkShiftCore.build/"*.o \
     Sources/MonkShift/System/SingleInstanceLock.swift Sources/MonkShift/System/SystemEventsClient.swift \
-    Sources/MonkShift/System/ReduceMotionAPI.swift \
+    Sources/MonkShift/System/ReduceMotionAPI.swift Sources/MonkShift/System/ColorFilterAPI.swift \
+    Sources/MonkShift/System/PreferencesWorker.swift \
     Tests/MonkShiftSystemTests/*.swift \
     -o .build/checks/MonkShiftSystemChecks
 .build/checks/MonkShiftSystemChecks

@@ -4,22 +4,39 @@ import MonkShiftCore
 
 /// Serializes potentially blocking preferences/filter work away from UI state.
 actor PreferencesWorker {
+    typealias ReadValue = @Sendable (String, String) -> Any?
+    typealias WriteValue = @Sendable (String, String, Any?) throws -> Void
+
     private let dock = "com.apple.dock"
     private let windowManager = "com.apple.WindowManager"
+    private let readValue: ReadValue
+    private let writeValue: WriteValue
     private var dockNeedsReload = false
     private lazy var colorFilter = Result { try ColorFilterAPI() }
     private lazy var reduceMotion = Result { try ReduceMotionAPI() }
 
-    private func value(_ domain: String, _ key: String) -> Any? {
+    init(readValue: @escaping ReadValue = { PreferencesWorker.systemValue($0, $1) },
+        writeValue: @escaping WriteValue = { try PreferencesWorker.systemWrite($0, $1, $2) }) {
+        self.readValue = readValue
+        self.writeValue = writeValue
+    }
+
+    private static func systemValue(_ domain: String, _ key: String) -> Any? {
         CFPreferencesSynchronize(domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
         return CFPreferencesCopyValue(key as CFString, domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
     }
 
-    private func write(_ domain: String, _ key: String, _ value: Any?) throws {
+    private static func systemWrite(_ domain: String, _ key: String, _ value: Any?) throws {
         CFPreferencesSetValue(key as CFString, value as CFPropertyList?, domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
         guard CFPreferencesSynchronize(domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
             throw MonkError("macOS refused to save \(domain) → \(key).")
         }
+    }
+
+    private func value(_ domain: String, _ key: String) -> Any? { readValue(domain, key) }
+
+    private func write(_ domain: String, _ key: String, _ value: Any?) throws {
+        try writeValue(domain, key, value)
         if domain == dock { dockNeedsReload = true }
     }
 
@@ -29,6 +46,8 @@ actor PreferencesWorker {
         case .stageManager: return (windowManager, ["GloballyEnabled"])
         case .hideRecentApps: return (windowManager, ["AutoHide"])
         case .oneWindowAtATime: return (windowManager, ["AppWindowGroupingBehavior"])
+        case .hideDesktopItems:
+            return (windowManager, ["StandardHideDesktopIcons", "HideDesktop", "StandardHideWidgets", "StageManagerHideWidgets"])
         default: return nil
         }
     }
@@ -48,6 +67,20 @@ actor PreferencesWorker {
         case .oneWindowAtATime:
             return FeatureState(enabled: (value(windowManager, "AppWindowGroupingBehavior") as? NSNumber)?.boolValue ?? false,
                 detail: "Takes effect while Stage Manager is on.")
+        case .hideDesktopItems:
+            let keys = keys(feature)!.1
+            let hidden = try keys.map { key -> Bool in
+                // Absent keys use macOS's default visibility; preserve their absence in snapshots.
+                guard let stored = value(windowManager, key) else { return false }
+                guard let number = stored as? NSNumber, number == 0 || number == 1 else {
+                    throw MonkError("macOS returned an unknown desktop visibility value for \(key).")
+                }
+                return number.boolValue
+            }
+            return FeatureState(enabled: hidden.allSatisfy { $0 },
+                detail: hidden.contains(true) && hidden.contains(false)
+                    ? "Some icons or widgets are still shown. Enable to hide them on the desktop and in Stage Manager."
+                    : nil)
         case .reduceMotion:
             return FeatureState(enabled: try reduceMotion.get().read())
         case .grayscale:
@@ -60,6 +93,7 @@ actor PreferencesWorker {
     func intensity() throws -> Double { try colorFilter.get().normalizedIntensity() }
 
     func snapshot(_ feature: Feature) throws -> Data {
+        if feature == .hideDesktopItems { _ = try read(feature) }
         if let (domain, keys) = keys(feature) {
             let values = keys.reduce(into: [String: Any]()) { if let value = value(domain, $1) { $0[$1] = value } }
             return try PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
@@ -79,6 +113,7 @@ actor PreferencesWorker {
             try write(windowManager, "GloballyEnabled", true)
         case .hideRecentApps: try write(windowManager, "AutoHide", true)
         case .oneWindowAtATime: try write(windowManager, "AppWindowGroupingBehavior", 1)
+        case .hideDesktopItems: try setDesktopItemsHidden(true)
         case .reduceMotion: try reduceMotion.get().set(enabled: true)
         case .grayscale: try colorFilter.get().apply(intensity: intensity)
         default: throw MonkError("\(feature.title) does not use the preferences backend.")
@@ -93,9 +128,19 @@ actor PreferencesWorker {
         case .stageManager: try write(windowManager, "GloballyEnabled", false)
         case .hideRecentApps: try write(windowManager, "AutoHide", false)
         case .oneWindowAtATime: try write(windowManager, "AppWindowGroupingBehavior", 0)
+        case .hideDesktopItems: try setDesktopItemsHidden(false)
         case .reduceMotion: try reduceMotion.get().set(enabled: false)
         case .grayscale: try colorFilter.get().disable()
         default: throw MonkError("\(feature.title) does not use the preferences backend.")
+        }
+    }
+
+    private func setDesktopItemsHidden(_ hidden: Bool) throws {
+        for key in keys(.hideDesktopItems)!.1 {
+            try write(windowManager, key, hidden ? 1 : 0)
+            guard (value(windowManager, key) as? NSNumber)?.boolValue == hidden else {
+                throw MonkError("macOS did not retain \(key). Its previous value is saved.")
+            }
         }
     }
 

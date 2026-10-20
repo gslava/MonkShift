@@ -34,7 +34,12 @@ func require(_ condition: Bool, _ message: String) throws {
             ("System event transport is serialized", SystemEventsChecks.testTransportIsSerialized),
             ("Unknown, denied and timed out replies fail honestly", SystemEventsChecks.testUnknownAndErrorRepliesAreRejected),
             ("Reduce Motion restores enabled and disabled baselines", ReduceMotionChecks.testSetAndRestore),
-            ("Rejected Reduce Motion writes are reported", ReduceMotionChecks.testRejectedWritesAreReported)
+            ("Rejected Reduce Motion writes are reported", ReduceMotionChecks.testRejectedWritesAreReported),
+            ("Desktop visibility reports complete and mixed states", DesktopVisibilityChecks.testObservedVisibility),
+            ("Desktop visibility restores exact preference values and absence", DesktopVisibilityChecks.testExactPreferenceRestoration),
+            ("Desktop visibility can show icons and widgets in both modes", DesktopVisibilityChecks.testDisableShowsBothModes),
+            ("Rejected desktop visibility writes fail honestly", DesktopVisibilityChecks.testRejectedWrites),
+            ("Desktop visibility session recovery survives partial restore and restart", { try await DesktopVisibilityChecks.testSessionRestartRecovery() })
         ]
         var failures = 0
         for (name, test) in tests {

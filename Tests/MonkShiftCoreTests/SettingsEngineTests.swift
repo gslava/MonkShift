@@ -92,6 +92,20 @@ import MonkShiftCore
         await expectFalse(engine.hasMonkSession)
     }
 
+    func testLegacySessionLeavesDesktopVisibilityUntouched() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        backend.values[.hideDesktopItems] = backend.applied
+        for feature in Feature.allCases where feature != .hideDesktopItems {
+            store.journal.monk[feature.rawValue] = backend.initial
+            backend.values[feature] = backend.applied
+        }
+        let engine = try SettingsEngine(backend: backend, store: store)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+        await expectEqual(backend.values[.hideDesktopItems], backend.applied)
+        await expectEqual(backend.writes, Feature.allCases.count - 1)
+        await expectFalse(engine.hasMonkSession)
+    }
+
     func testAllSnapshotsPersistBeforeFirstMutation() async throws {
         let backend = FakeBackend(), store = MemoryStore()
         backend.unavailable = [.stageManager]

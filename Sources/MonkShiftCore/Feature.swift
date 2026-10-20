@@ -2,7 +2,7 @@ import Foundation
 
 public enum Feature: String, CaseIterable, Codable, Identifiable, Sendable {
     case instantDock, hideDock, hideMenuBar
-    case stageManager, hideRecentApps, oneWindowAtATime, reduceMotion, blackWallpaper, grayscale
+    case stageManager, hideRecentApps, oneWindowAtATime, hideDesktopItems, reduceMotion, blackWallpaper, grayscale
 
     public var id: String { rawValue }
     public var title: String {
@@ -13,6 +13,7 @@ public enum Feature: String, CaseIterable, Codable, Identifiable, Sendable {
         case .stageManager: return "Stage Manager"
         case .hideRecentApps: return "Hide recent apps in Stage Manager"
         case .oneWindowAtATime: return "Show windows one at a time"
+        case .hideDesktopItems: return "Hide desktop icons and widgets"
         case .reduceMotion: return "Reduce Motion"
         case .blackWallpaper: return "Pure black wallpaper"
         case .grayscale: return "Grayscale color filter"

@@ -144,7 +144,8 @@ private func require(_ condition: Bool, _ message: String) throws {
             ("Intent restore failures retain records for retry", testIntentRestoreFailure),
             ("Intent finalization failure is returned to its caller", testIntentFinalizationFailure),
             ("Intents fail cleanly during startup and shutdown", testIntentLifecycle),
-            ("Reduce Motion menu control and Monk Mode share restoration", testReduceMotionMenuControl)
+            ("Reduce Motion menu control and Monk Mode share restoration", { try await testDisplayMenuControl(.reduceMotion) }),
+            ("Desktop visibility menu control and Monk Mode share restoration", { try await testDisplayMenuControl(.hideDesktopItems) })
         ]
         var failures = 0
         for (name, check) in checks {
@@ -397,26 +398,26 @@ private func require(_ condition: Bool, _ message: String) throws {
         throw UIFailure(description: "Expected the shortcut to report a failure")
     }
 
-    @MainActor private static func testReduceMotionMenuControl() async throws {
+    @MainActor private static func testDisplayMenuControl(_ feature: Feature) async throws {
         let f = Fixture(); defer { f.close() }
         try await f.start()
         let controller = SettingsMenuController(model: f.model, showWindow: {}, quit: {})
         f.model.onRefresh = { [weak controller] in controller?.update() }
-        guard let row = controller.menu.items.first(where: { $0.representedObject as? String == Feature.reduceMotion.rawValue }),
-              let action = row.action else { throw UIFailure(description: "Reduce Motion menu control is missing") }
-        try require(row.title == "Reduce Motion" && row.state == .off && row.isEnabled, "Reduce Motion menu state is incorrect")
-        try require(NSApp.sendAction(action, to: row.target, from: row), "Reduce Motion menu action was not handled")
+        guard let row = controller.menu.items.first(where: { $0.representedObject as? String == feature.rawValue }),
+              let action = row.action else { throw UIFailure(description: "\(feature.title) menu control is missing") }
+        try require(row.title == feature.title && row.state == .off && row.isEnabled, "\(feature.title) menu state is incorrect")
+        try require(NSApp.sendAction(action, to: row.target, from: row), "\(feature.title) menu action was not handled")
         try await until { !f.model.busy }
-        try require(f.backend.values[.reduceMotion] == true && row.state == .on && !f.model.hasSession,
-            "Individual Reduce Motion control did not update independently")
+        try require(f.backend.values[feature] == true && row.state == .on && !f.model.hasSession,
+            "Individual \(feature.title) control did not update independently")
         try await f.model.performMonkMode(.enable)
         try await f.model.performMonkMode(.disable)
-        try require(f.backend.values[.reduceMotion] == true && row.state == .on,
-            "Disabling Monk Mode overwrote the earlier individual Reduce Motion setting")
+        try require(f.backend.values[feature] == true && row.state == .on,
+            "Disabling Monk Mode overwrote the earlier individual \(feature.title) setting")
         f.model.restoreAll()
         try await until { !f.model.busy }
-        try require(f.backend.values[.reduceMotion] == false && row.state == .off,
-            "Restore All did not restore the original Reduce Motion baseline")
+        try require(f.backend.values[feature] == false && row.state == .off,
+            "Restore All did not restore the original \(feature.title) baseline")
     }
 
     @MainActor private static func testAppIntentActions() async throws {

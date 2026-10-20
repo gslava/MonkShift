@@ -93,7 +93,7 @@ struct ControlsView: View {
                     }
                     group("Dock & Menu Bar", features: [.instantDock, .hideDock, .hideMenuBar])
                     group("Stage Manager", features: [.stageManager, .hideRecentApps, .oneWindowAtATime])
-                    group("Display", features: [.reduceMotion, .blackWallpaper, .grayscale])
+                    group("Display", features: [.hideDesktopItems, .reduceMotion, .blackWallpaper, .grayscale])
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Grayscale intensity")

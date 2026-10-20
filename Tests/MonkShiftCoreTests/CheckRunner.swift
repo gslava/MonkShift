@@ -49,6 +49,7 @@ import Foundation
             ("Reduce Motion session restores either original state", suite.testReduceMotionSessionRestoresBothOriginalStates),
             ("Reduce Motion restore failure survives file-store restart", suite.testReduceMotionRestoreFailureSurvivesFileStoreRestart),
             ("Legacy sessions leave Reduce Motion untouched", suite.testLegacySessionLeavesReduceMotionUntouched),
+            ("Legacy sessions leave desktop visibility untouched", suite.testLegacySessionLeavesDesktopVisibilityUntouched),
             ("All enabled requires observed settings", summary.testAllEnabledRequiresEveryObservedSetting),
             ("Off requires observed settings", summary.testAllOffRequiresEveryObservedSetting),
             ("Partial status reflects individual settings", summary.testPartialReflectsIndividualSettings),

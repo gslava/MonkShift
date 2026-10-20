@@ -103,7 +103,7 @@ releases the lock on exit or a crash; an old PID file alone cannot block startup
 
 Every setting has a checkbox in the window and in the native menu bar menu. Status is refreshed when opening the menu/window, returning to MonkShift, changing the desktop Space while the window is visible, waking the Mac, and after applying settings. Use **Refresh** for changes made elsewhere. No repeating background polling is used.
 
-The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of nine. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. The summary stays visible during background work. A small activity indicator appears in a fixed space in the window only if work lasts longer than half a second. Operation errors appear separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
+The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of ten. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. The summary stays visible during background work. A small activity indicator appears in a fixed space in the window only if work lasts longer than half a second. Operation errors appear separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
 
 | Setting | Implementation and scope |
 | --- | --- |
@@ -113,6 +113,7 @@ The top of the window and menu shows **All enabled**, **Partially enabled**, **O
 | Stage Manager | `com.apple.WindowManager` → `GloballyEnabled`. Requires “Displays have separate Spaces”; if disabled, MonkShift explains the prerequisite. |
 | Hide recent apps | `com.apple.WindowManager` → `AutoHide = true`. Only affects Stage Manager while it is enabled. |
 | One window at a time | `com.apple.WindowManager` → `AppWindowGroupingBehavior = 1`. Only affects Stage Manager. |
+| Hide desktop icons and widgets | `com.apple.WindowManager` → `StandardHideDesktopIcons`, `HideDesktop`, `StandardHideWidgets`, and `StageManagerHideWidgets` set to `1`. Hides both types of items on the desktop and in Stage Manager without restarting Finder. All four original values, including absent keys, are saved for restoration. |
 | Reduce Motion | System Accessibility → Display → Reduce Motion, through dynamically resolved `_AXInterfaceGetReduceMotionEnabled` / `_AXInterfaceSetReduceMotionEnabled`. Included in Monk Mode and restored to its saved enabled/disabled state. |
 | Black wallpaper | An 8 × 8 opaque black PNG generated locally, applied through `NSWorkspace` to each connected display in the current desktop Space. |
 | Grayscale | System display color filter category 1, type 1, through dynamically resolved `MADisplayFilterPref*` APIs and the system Universal Access daemon. |
@@ -126,7 +127,19 @@ The grayscale slider is available in the window and **directly below the graysca
 
 Menu control fixtures, shown separately from the surrounding native menu.
 
-**Compatibility:** Dock and Stage Manager preference keys, Reduce Motion setters and the color filter symbols are not stable public configuration APIs. Their actual visual effects require manual checks on each supported macOS version. Checkboxes read system preferences/API state, not screen pixels. A preference read-back confirms the stored value; it cannot prove the corresponding daemon rendered the effect. Missing symbols, failed writes and unknown states are shown explicitly. No SIP changes or administrator privileges are used.
+**Compatibility:** Dock, Stage Manager and desktop visibility preference keys, Reduce Motion setters and the color filter symbols are not stable public configuration APIs. Their actual visual effects require manual checks on each supported macOS version. Checkboxes read system preferences/API state, not screen pixels. A preference read-back confirms the stored value; it cannot prove the corresponding daemon rendered the effect. Missing symbols, failed writes and unknown states are shown explicitly. No SIP changes or administrator privileges are used.
+
+**Hide desktop icons and widgets** is one checkbox in the window's **Display**
+group and in the menu. It is on only when icons and widgets are configured to be
+hidden in both desktop modes. Mixed configurations show an explanation. Monk Mode
+captures all four settings before hiding them, and disabling Monk Mode or using
+Restore All restores the exact saved configuration. Older sessions without this
+feature's snapshot leave its settings untouched. Files and widget placements are
+preserved. This uses macOS's native visibility settings: clicking the desktop can
+temporarily reveal hidden items, as described in Apple's
+[Stage Manager guide](https://support.apple.com/en-gb/guide/mac-help/mchl534ba392/15.0/mac/15.0).
+The widget preference keys are also used by
+[WidgetToggler](https://github.com/sieren/WidgetToggler#toggling-widgets-from-cli).
 
 Reduce Motion has its own checkbox in the window's **Display** group and in the
 menu. Monk Mode saves its current state before enabling it. Disabling Monk Mode
@@ -211,11 +224,11 @@ No fixed RAM claim is made until the release build is measured. To measure, laun
 
 ## Verification
 
-`bash scripts/check.sh` runs 23 core checks against observed-state fixtures, a fake backend and temporary storage: aggregate status including unknown/unavailable settings, write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, file corruption/version handling, suspension/concurrent-operation guards, and failed finalization recovery. Reduce Motion checks include both original states, failed restoration through a file-store restart and legacy sessions without its snapshot. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
+`bash scripts/check.sh` runs 24 core checks against observed-state fixtures, a fake backend and temporary storage: aggregate status including unknown/unavailable settings, write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, file corruption/version handling, suspension/concurrent-operation guards, and failed finalization recovery. Reduce Motion checks include both original states, failed restoration through a file-store restart and legacy sessions without its snapshot. Legacy sessions also leave desktop visibility untouched when it was not captured. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
 
 The same script compiles the app's actual permission manager with a fake client and runs 8 additional checks: idle-target recovery, denied/missing/revoked consent, unavailable targets, launch failures, concurrent refreshes, and explicit request completion. No real services are started or privacy prompts requested by these checks.
 
-Eleven isolated system checks cover cross-process file locking, normal/crash
+Sixteen isolated system checks cover cross-process file locking, normal/crash
 release, lock-file errors, typed Apple Event requests, background serialization,
 main-actor responsiveness during a slow fake reply, and unknown/denied/unhandled/timed-out
 replies. Command codes are compared with macOS's installed scripting dictionary
@@ -223,9 +236,13 @@ for both Dock and menu bar reads/writes, including true and false values. Only
 permission failures suggest changing Automation access. These checks use temporary
 files, short-lived test subprocesses and a fake event transport; no real Apple
 Events are sent. Reduce Motion accessors are replaced with fakes to check
-enable/disable/restoration and rejected writes without changing the OS.
+enable/disable/restoration and rejected writes without changing the OS. Desktop
+visibility checks inject in-memory preference access into the real preferences
+worker. They cover all sixteen visibility combinations, invalid values, exact
+restoration of mixed Boolean/integer values and absent keys, ignored writes,
+durable snapshots before mutation, and partial restoration retried after restart.
 
-Twenty-five UI/intent checks use the actual app model and native menu with fake settings and
+Twenty-six UI/intent checks use the actual app model and native menu with fake settings and
 permissions, isolated preferences/storage, and global shortcuts disabled. They
 cover input during refresh, rapid toggles, failed-change recovery, captured slider
 values, in-flight intensity reads, finalization errors, permission revocation,
@@ -233,8 +250,8 @@ native menu/slider identity, stable Quit availability, queued restoration and
 deferred shutdown while changes or a refresh are pending. The ten intent checks
 also cover all three actions, repeated enables, completion/read-back ordering,
 initial refresh, denied/revoked permission, partial apply/restore errors,
-finalization failure and startup/shutdown behavior. A menu action check verifies
-that individual Reduce Motion changes, Monk Mode and Restore All preserve their
+finalization failure and startup/shutdown behavior. Menu action checks verify
+that individual Reduce Motion and desktop visibility changes, Monk Mode and Restore All preserve their
 respective baselines.
 No real Apple Events, privacy prompts or system-setting writes are performed.
 
@@ -245,7 +262,8 @@ Manual acceptance checks on **both macOS 14 and macOS 15**:
 - Deny the permission: controls and shortcuts remain locked. Grant it: controls unlock. Revoke it: future actions are blocked.
 - After granting permission, close the window and let System Events exit while idle. Open MonkShift's menu: controls should appear after the background check, without another consent prompt. Repeat after restarting MonkShift.
 - Record initial Dock, menu bar, Stage Manager, wallpaper and filter states. Enable each setting and verify its actual visual effect, including Stage Manager grouping with two windows from the same app.
-- Enable Monk Mode; verify all nine settings and the aggregate status at the top of both the window and menu. Disable one setting and confirm **Partially enabled** appears even with a saved session. Disable Monk Mode and compare to the recorded baseline. Unknown/unavailable readings must not produce **All enabled** or a false **Off**.
+- Enable Monk Mode; verify all ten settings and the aggregate status at the top of both the window and menu. Disable one setting and confirm **Partially enabled** appears even with a saved session. Disable Monk Mode and compare to the recorded baseline. Unknown/unavailable readings must not produce **All enabled** or a false **Off**.
+- Compare **Hide desktop icons and widgets** with System Settings → Desktop & Dock → Show Items / Show Widgets. Test Stage Manager both off and on, starting with all items visible, all hidden and mixed settings. Enable individually and through Monk Mode; verify both icons and widgets hide, desktop files and widget positions are preserved, and disabling Monk Mode restores each original value. Quit/reopen with a session active and restore. Check the documented temporary reveal on desktop click, multiple displays and Spaces. Old sessions without a desktop-visibility snapshot must leave these settings untouched.
 - Compare Reduce Motion with System Settings → Accessibility → Display. Toggle it individually and through Monk Mode, starting once enabled and once disabled; disable Monk Mode and verify the exact original state. Quit/reopen with the mode active, then restore. Check another running app observes the change. These live checks are separate from fake-backend tests and read-only symbol/getter probes.
 - Start with a different color filter enabled. Enable grayscale, adjust its slider, and restore; confirm the original type and intensity are preserved. Repeat through the menu bar's direct **Grayscale intensity** control: the percentage should follow dragging, settings should apply on release, and the window should show the same value. With grayscale off, verify the menu slider is disabled; choose a preferred amount in the window, then enable the filter and verify that amount is used. Check both controls stay available during changes and are disabled when the filter is unavailable/unknown. Make several quick checkbox/slider changes: confirm the last chosen values are retained, the interface does not grey out, and the open native menu slider retains focus through background refreshes.
 - Quit while Monk Mode is active. Reopen and restore the previous state.

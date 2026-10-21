@@ -31,6 +31,20 @@ work, with fewer invitations to consume and more room to think.
 
 *Real desktop screenshots before and after Monk Mode.*
 
+## Version 0.1.2
+
+- Dim background windows with an independent **0–90%** intensity slider in the
+  window and menu bar. Monk Mode remembers your last window-focus choice.
+- Keep the document's dimming while opening, reopening or switching menus,
+  including utility panels such as Stats. Temporary popup windows preserve the
+  document anchor instead of replacing it.
+- Accessibility is requested at startup for dimming. The other controls remain
+  available if it is denied. No additional libraries, screen capture or background
+  polling are used.
+
+See [Window Focus controls](#controls-and-status) for behavior and
+[manual checks](#background-dimming-manual-checks) for compatibility validation.
+
 ## Install from GitHub Releases
 
 Published versions provide a **Universal DMG** for Apple Silicon and Intel on

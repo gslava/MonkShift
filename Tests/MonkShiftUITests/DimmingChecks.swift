@@ -2,6 +2,41 @@ import AppKit
 import ApplicationServices
 import MonkShiftCore
 
+// Owned by one FocusReader until its awaited read completes. No live AX calls.
+private final class FocusAccessibilityFixture: DimmingAccessibilityReading, @unchecked Sendable {
+    let window = AXUIElementCreateApplication(456)
+    let hasCloseButton: Bool
+    let geometryAvailable: Bool
+    private(set) var requests: [String] = []
+    let bounds = CGRect(x: 20, y: 30, width: 300, height: 400)
+
+    init(hasCloseButton: Bool = false, geometryAvailable: Bool = true) {
+        self.hasCloseButton = hasCloseButton
+        self.geometryAvailable = geometryAvailable
+    }
+    func isTrusted() -> Bool { true }
+    func application(pid: pid_t) -> AXUIElement { AXUIElementCreateApplication(pid) }
+    func prepare(_ element: AXUIElement) {}
+    func value(_ attribute: String, of element: AXUIElement) -> CFTypeRef? {
+        requests.append(attribute)
+        switch attribute {
+        case kAXFocusedWindowAttribute: return window
+        case kAXRoleAttribute: return kAXWindowRole as CFString
+        case kAXSubroleAttribute: return kAXStandardWindowSubrole as CFString
+        case kAXCloseButtonAttribute: return hasCloseButton ? window : nil
+        case kAXPositionAttribute:
+            guard geometryAvailable else { return nil }
+            var point = bounds.origin
+            return AXValueCreate(.cgPoint, &point)
+        case kAXSizeAttribute:
+            guard geometryAvailable else { return nil }
+            var size = bounds.size
+            return AXValueCreate(.cgSize, &size)
+        default: return nil
+        }
+    }
+}
+
 @MainActor private final class TrackingFixture: DimmingTracking {
     var onChange: ((DimmingTarget?) -> Void)?
     var onFocusChangeStarted: ((Bool) -> Void)?
@@ -250,6 +285,63 @@ import MonkShiftCore
             accessoryApplication: false, hasCloseButton: false), "A regular app's custom window was treated as a menu")
         try check(DimmingWindowClassification.isTransient(role: kAXPopoverRole, subrole: nil,
             accessoryApplication: false, hasCloseButton: true), "A normal-level popover was treated as a document")
+    }
+
+    static func testPopupReaderIgnoresUnpublishedOrIncompleteGeometry() async throws {
+        for geometryAvailable in [true, false] {
+            let client = FocusAccessibilityFixture(geometryAvailable: geometryAvailable)
+            let reader = FocusReader(accessibility: client, windows: { [] })
+            let reading = await reader.read(pid: 123, transientApplication: true)
+            try check(reading.target == nil && reading.menuActive && reading.canRetainWindow,
+                "An unpublished/accessibility-incomplete Stats-style popup bypassed classification")
+            try check(!client.requests.contains(kAXPositionAttribute) && !client.requests.contains(kAXSizeAttribute),
+                "Popup retention depended on geometry arriving before WindowServer publication")
+        }
+    }
+
+    static func testPopupReaderKeepsDimmingThroughRepeatedStatsPanels() async throws {
+        let f = DimmingFixture(), gate = TransitionGate()
+        f.transitionWait = { try await gate.wait() }
+        var focus = DimmingFocusState()
+        _ = focus.completeReading(pid: 321, focused: f.target, retained: nil, canRetainWindow: true, inferredMenu: false)
+        let windows = [WindowMetadata(id: f.target.windowID, pid: 321, layer: 0, bounds: f.target.bounds)]
+        try await f.service.set(enabled: true)
+        await f.focus(f.target)
+        f.renderer.events.removeAll()
+        for index in 0..<4 {
+            let client = FocusAccessibilityFixture(geometryAvailable: index.isMultiple(of: 2))
+            let reader = FocusReader(accessibility: client, windows: { [] })
+            let reading = await reader.read(pid: 123, transientApplication: true)
+            let retained = focus.anchor?.visibleTarget(frontmostPID: 123, transientApplication: true, windows: windows)
+            let resolved = focus.completeReading(pid: 123, focused: reading.target, retained: retained,
+                canRetainWindow: reading.canRetainWindow, inferredMenu: reading.menuActive)
+            f.tracker.onMenuTrackingChanged?(focus.menus.active)
+            await f.focus(resolved)
+            try check(f.renderer.target == f.target && focus.anchor?.pid == 321 && !f.renderer.events.contains("hide"),
+                "An actual reader result for an unpublished popup hid or replaced the document anchor")
+            focus.menus.clear()
+            f.tracker.onMenuTrackingChanged?(false)
+            try await until { gate.waiting }
+            await f.focus(retained)
+            gate.release()
+            await f.focus(retained)
+        }
+        try await f.service.set(enabled: false)
+    }
+
+    static func testReaderKeepsSettingsAndAmbiguousFocusRules() async throws {
+        let bounds = CGRect(x: 20, y: 30, width: 300, height: 400)
+        let window = WindowMetadata(id: 99, pid: 123, layer: 0, bounds: bounds)
+        let settings = FocusReader(accessibility: FocusAccessibilityFixture(hasCloseButton: true), windows: { [window] })
+        let focused = await settings.read(pid: 123, transientApplication: true)
+        try check(focused.target?.windowID == 99 && !focused.menuActive, "An accessory settings window no longer became the focus anchor")
+        let document = FocusReader(accessibility: FocusAccessibilityFixture(), windows: { [window] })
+        let regular = await document.read(pid: 123, transientApplication: false)
+        try check(regular.target?.windowID == 99 && !regular.menuActive, "A regular app's custom window was treated as a popup")
+        let ambiguous = FocusReader(accessibility: FocusAccessibilityFixture(hasCloseButton: true), windows: { [window, window] })
+        let missing = await ambiguous.read(pid: 123, transientApplication: true)
+        try check(missing.target == nil && !missing.menuActive && !missing.canRetainWindow,
+            "Early classification concealed ambiguous normal-level settings windows")
     }
 
     static func testVisibleWindowRetentionRejectsStaleOrAmbiguousFocus() async throws {

@@ -22,7 +22,7 @@ struct WindowMetadata: Sendable {
     }
 }
 
-private struct FocusReading: @unchecked Sendable {
+struct FocusReading: @unchecked Sendable {
     let target: DimmingTarget?
     let element: AXUIElement?
     var menuActive = false
@@ -102,23 +102,53 @@ enum DimmingWindowClassification {
     }
 }
 
+protocol DimmingAccessibilityReading: Sendable {
+    func isTrusted() -> Bool
+    func application(pid: pid_t) -> AXUIElement
+    func prepare(_ element: AXUIElement)
+    func value(_ attribute: String, of element: AXUIElement) -> CFTypeRef?
+}
+
+private struct SystemDimmingAccessibilityReader: DimmingAccessibilityReading {
+    func isTrusted() -> Bool { AXIsProcessTrusted() }
+    func application(pid: pid_t) -> AXUIElement { AXUIElementCreateApplication(pid) }
+    func prepare(_ element: AXUIElement) { AXUIElementSetMessagingTimeout(element, 0.2) }
+    func value(_ attribute: String, of element: AXUIElement) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value
+    }
+}
+
 /// AX calls may wait for another application's IPC. Bound them and keep them off AppKit.
-private actor FocusReader {
+actor FocusReader {
+    private let accessibility: any DimmingAccessibilityReading
+    private let windows: @Sendable () -> [WindowMetadata]
+
+    init(accessibility: (any DimmingAccessibilityReading)? = nil,
+        windows: (@Sendable () -> [WindowMetadata])? = nil) {
+        self.accessibility = accessibility ?? SystemDimmingAccessibilityReader()
+        self.windows = windows ?? { Self.systemWindowList() }
+    }
+
     func read(pid: pid_t, transientApplication: Bool) -> FocusReading {
-        guard AXIsProcessTrusted() else { return FocusReading(target: nil, element: nil) }
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.2)
-        var raw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &raw) == .success,
-              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+        guard accessibility.isTrusted() else { return FocusReading(target: nil, element: nil) }
+        let app = accessibility.application(pid: pid)
+        accessibility.prepare(app)
+        guard let raw = accessibility.value(kAXFocusedWindowAttribute, of: app), CFGetTypeID(raw) == AXUIElementGetTypeID() else {
             return missingFocus(app: app, pid: pid, window: nil, transientApplication: transientApplication)
         }
         let window = raw as! AXUIElement
-        AXUIElementSetMessagingTimeout(window, 0.2)
-        var position: CFTypeRef?, size: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position) == .success,
-              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
-              let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else {
+        accessibility.prepare(window)
+        // Classify before geometry or WindowServer matching: a newly shown
+        // utility popup may already hold AX focus while its CG entry is absent
+        // or its frame is still changing. It must never clear the document anchor.
+        if isTransientWindow(window, accessoryApplication: transientApplication) {
+            return FocusReading(target: nil, element: window, menuActive: true)
+        }
+        guard let position = accessibility.value(kAXPositionAttribute, of: window),
+              let size = accessibility.value(kAXSizeAttribute, of: window),
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else {
             return missingFocus(app: app, pid: pid, window: window, transientApplication: transientApplication)
         }
         var point = CGPoint.zero, dimensions = CGSize.zero
@@ -130,9 +160,6 @@ private actor FocusReader {
         let windows = windowList()
         let bounds = CGRect(origin: point, size: dimensions)
         if let target = WindowMetadata.focused(pid: pid, bounds: bounds, windows: windows) {
-            if isTransientWindow(window, accessoryApplication: transientApplication) {
-                return FocusReading(target: nil, element: window, menuActive: true)
-            }
             return FocusReading(target: target, element: window)
         }
         var missing = missingFocus(app: app, pid: pid, window: window, transientApplication: transientApplication, windows: windows)
@@ -144,18 +171,19 @@ private actor FocusReader {
     }
 
     private func isTransientWindow(_ window: AXUIElement, accessoryApplication: Bool) -> Bool {
-        var role: CFTypeRef?, subrole: CFTypeRef?, closeButton: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXRoleAttribute as CFString, &role)
-        AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subrole)
-        if accessoryApplication {
-            AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &closeButton)
-        }
+        let role = accessibility.value(kAXRoleAttribute, of: window)
+        let subrole = accessibility.value(kAXSubroleAttribute, of: window)
+        let closeButton = accessoryApplication ? accessibility.value(kAXCloseButtonAttribute, of: window) : nil
         return DimmingWindowClassification.isTransient(role: role as? String, subrole: subrole as? String,
             accessoryApplication: accessoryApplication,
             hasCloseButton: closeButton.map { CFGetTypeID($0) == AXUIElementGetTypeID() } ?? false)
     }
 
     func windowList() -> [WindowMetadata] {
+        windows()
+    }
+
+    private static func systemWindowList() -> [WindowMetadata] {
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let windows = list.compactMap { info -> WindowMetadata? in
             guard let owner = info[kCGWindowOwnerPID as String] as? NSNumber,
@@ -170,13 +198,11 @@ private actor FocusReader {
 
     private func missingFocus(app: AXUIElement, pid: pid_t, window: AXUIElement?,
         transientApplication: Bool, windows: [WindowMetadata]? = nil) -> FocusReading {
-        var focused: CFTypeRef?
         var role: CFTypeRef?
-        if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-            let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
+        if let focused = accessibility.value(kAXFocusedUIElementAttribute, of: app), CFGetTypeID(focused) == AXUIElementGetTypeID() {
             let element = focused as! AXUIElement
-            AXUIElementSetMessagingTimeout(element, 0.2)
-            AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+            accessibility.prepare(element)
+            role = accessibility.value(kAXRoleAttribute, of: element)
         }
         let windows = windows ?? windowList()
         return FocusReading(target: nil, element: window, menuActive: DimmingMenuDetection.isMenu(role: role as? String,

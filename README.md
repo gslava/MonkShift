@@ -161,8 +161,11 @@ the last document window, with menus above it. Repeated clicks do not discard th
 confirmed window history when a temporary Accessibility reply is inconclusive.
 Floating panels, popovers and accessory-app windows without a native close control
 do not replace that anchor, even if they have the same WindowServer level as a
-document window; closable settings windows can become the new anchor. Closing or
-minimizing the anchor, Space/display changes and wake discard it. Permission loss,
+document window. Classification runs before geometry and WindowServer matching,
+so a newly opened utility panel can retain the document even while its metadata
+is unpublished or its frame is incomplete. Closable settings windows can become
+the new anchor. Closing or minimizing the anchor, Space/display changes and wake
+discard it. Permission loss,
 conflicting one-window mode and disabling dimming remove the effect. There is no
 animation, extra transition layer or idle polling. See the
 [manual checks](#background-dimming-manual-checks) for remaining live compatibility
@@ -287,7 +290,7 @@ worker. They cover all sixteen visibility combinations, invalid values, exact
 restoration of mixed Boolean/integer values and absent keys, ignored writes,
 durable snapshots before mutation, and partial restoration retried after restart.
 
-Fifty-two UI/intent checks use the actual app model and native menu with fake settings and
+Fifty-five UI/intent checks use the actual app model and native menu with fake settings and
 permissions, isolated preferences/storage, and global shortcuts disabled. They
 cover input during refresh, rapid toggles, failed-change recovery, captured slider
 values, in-flight intensity reads, finalization errors, permission revocation,
@@ -300,8 +303,12 @@ that individual Reduce Motion and desktop visibility changes, Monk Mode and Rest
 respective baselines.
 Dimming checks also simulate delayed WindowServer publication, bounded genuine ordering failures, cancelled validation, uninterrupted focus handoff, deadline expiry, menu retention/close, nested menu sources, transient-panel detection, slow/missing AX menu replies without menu notifications, explicit menu events overriding missing inferred state, preserved confirmed history after unresolved reads, repeated menu switching without document refocus, stale/ambiguous anchor rejection and immediate clearing for unsafe transitions even while a menu is open. Native unshown window fixtures also distinguish a level-zero accessory popup from a closable settings window. No real Apple Events, privacy prompts or system-setting writes are performed.
 
-The suite totals **108 checks**: 32 core, 8 Automation permission, 16 system and
-52 UI/intent checks. These checks do not establish live menu compatibility or
+Focus-reader checks inject Accessibility responses and window metadata into the
+actual background reader. They cover unpublished/incomplete popup geometry,
+repeated Stats-style panel handoffs, real settings windows and ambiguous matches.
+
+The suite totals **111 checks**: 32 core, 8 Automation permission, 16 system and
+55 UI/intent checks. These checks do not establish live menu compatibility or
 CPU/RAM usage.
 
 `bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.

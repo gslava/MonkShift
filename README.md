@@ -4,6 +4,12 @@
 
 A minimal native macOS focus utility built with SwiftUI and AppKit. macOS 14 or later. MIT licensed, fully offline, no dependencies, accounts, analytics, network clients, web views, or resident helper processes.
 
+Monk Mode combines your chosen window-focus mode with Dock, menu bar, Stage
+Manager and display preferences, then restores the previous settings when
+disabled. Choose between showing one window at a time in Stage Manager and
+dimming background windows with an independent intensity control up to 90%.
+Settings are also available individually in the app window and menu bar.
+
 <p>
   <img src="docs/images/controls-light.png" width="280" alt="MonkShift controls in light appearance">
   <img src="docs/images/controls-dark.png" width="280" alt="MonkShift controls in dark appearance">
@@ -113,7 +119,7 @@ The top of the window and menu shows **All enabled**, **Partially enabled**, **O
 | Stage Manager | `com.apple.WindowManager` → `GloballyEnabled`. Requires “Displays have separate Spaces”; if disabled, MonkShift explains the prerequisite. |
 | Hide recent apps | `com.apple.WindowManager` → `AutoHide = true`. Only affects Stage Manager while it is enabled. |
 | One window at a time | `com.apple.WindowManager` → `AppWindowGroupingBehavior = 1`. Only affects Stage Manager. Mutually exclusive with background dimming. |
-| Dim background windows | Native, click-through AppKit windows ordered immediately below the active normal-level window. AX/Workspace notifications identify focus; no screen capture, private window API, helper or polling. Independent 0–90% intensity. |
+| Dim background windows | Native, click-through AppKit windows ordered immediately below the active normal-level window. Menus retain the last window's dimming; a new document window becomes the anchor. AX/Workspace and native menu notifications identify focus; no screen capture, private window API, helper or polling. Independent 0–90% intensity. |
 | Hide desktop icons and widgets | `com.apple.WindowManager` → `StandardHideDesktopIcons`, `HideDesktop`, `StandardHideWidgets`, and `StageManagerHideWidgets` set to `1`. Hides both types of items on the desktop and in Stage Manager without restarting Finder. All four original values, including absent keys, are saved for restoration. |
 | Reduce Motion | System Accessibility → Display → Reduce Motion, through dynamically resolved `_AXInterfaceGetReduceMotionEnabled` / `_AXInterfaceSetReduceMotionEnabled`. Included in Monk Mode and restored to its saved enabled/disabled state. |
 | Black wallpaper | An 8 × 8 opaque black PNG generated locally, applied through `NSWorkspace` to each connected display in the current desktop Space. |
@@ -144,7 +150,23 @@ Background dimming has its own **0–90%** slider in the window and directly bel
 
 After reordering, a bounded deferred validation waits for WindowServer to publish the new layer (up to three checks, 40 ms apart). This is only triggered by an actual layer change; there is no repeating background timer. Stale validations are cancelled on focus changes or disable. Decorative overlays are excluded from Accessibility, and their own window-created/main-window notifications are not observed.
 
-Ordinary app/window activation reuses the visible layer and reorders it directly under the replacement window. A temporary missing-focus result keeps the previous layer for at most 150 ms; a one-shot deadline removes it if no eligible window arrives. A replacement cancels that deadline, and there is no animation, extra layer or idle polling. Space/display changes and wake discard the old anchor immediately; permission loss and grouping conflicts bypass the grace period.
+Ordinary app/window activation reuses the visible layer and reorders it directly
+under the replacement window. An unresolved focus change has a one-shot 150 ms
+handoff deadline. A confirmed, still-visible window can remain the anchor during
+temporary loss of Accessibility focus in the same app or while a menu bar utility
+takes focus. The window's ownership and visibility are checked before reuse.
+
+Opening, closing or switching menus preserves the chosen dimming intensity below
+the last document window, with menus above it. Repeated clicks do not discard the
+confirmed window history when a temporary Accessibility reply is inconclusive.
+Floating panels, popovers and accessory-app windows without a native close control
+do not replace that anchor, even if they have the same WindowServer level as a
+document window; closable settings windows can become the new anchor. Closing or
+minimizing the anchor, Space/display changes and wake discard it. Permission loss,
+conflicting one-window mode and disabling dimming remove the effect. There is no
+animation, extra transition layer or idle polling. See the
+[manual checks](#background-dimming-manual-checks) for remaining live compatibility
+and resource measurements.
 
 The effect pauses when the active window cannot be identified unambiguously, ordering fails, or one-window mode is enabled externally. Accessibility loss hides the layer and stops tracking when detected at the next focus/refresh event. Settings changed outside MonkShift are rechecked on those events or with Refresh; there is no repeating check. Unsupported/ambiguous windows remain undimmed. The implementation uses only normal-level windows and matches public window metadata by process and frame; exact matches between overlapping same-sized windows are deliberately not guessed. Mission Control, full-screen transitions and Stage Manager animation behavior still require live validation.
 
@@ -265,7 +287,7 @@ worker. They cover all sixteen visibility combinations, invalid values, exact
 restoration of mixed Boolean/integer values and absent keys, ignored writes,
 durable snapshots before mutation, and partial restoration retried after restart.
 
-Forty-two UI/intent checks use the actual app model and native menu with fake settings and
+Fifty-two UI/intent checks use the actual app model and native menu with fake settings and
 permissions, isolated preferences/storage, and global shortcuts disabled. They
 cover input during refresh, rapid toggles, failed-change recovery, captured slider
 values, in-flight intensity reads, finalization errors, permission revocation,
@@ -276,7 +298,11 @@ initial refresh, denied/revoked permission, partial apply/restore errors,
 finalization failure and startup/shutdown behavior. Menu action checks verify
 that individual Reduce Motion and desktop visibility changes, Monk Mode and Restore All preserve their
 respective baselines.
-Dimming checks also simulate delayed WindowServer publication, bounded genuine ordering failures, cancelled validation, uninterrupted focus handoff, deadline expiry and immediate clearing for unsafe transitions. No real Apple Events, privacy prompts or system-setting writes are performed.
+Dimming checks also simulate delayed WindowServer publication, bounded genuine ordering failures, cancelled validation, uninterrupted focus handoff, deadline expiry, menu retention/close, nested menu sources, transient-panel detection, slow/missing AX menu replies without menu notifications, explicit menu events overriding missing inferred state, preserved confirmed history after unresolved reads, repeated menu switching without document refocus, stale/ambiguous anchor rejection and immediate clearing for unsafe transitions even while a menu is open. Native unshown window fixtures also distinguish a level-zero accessory popup from a closable settings window. No real Apple Events, privacy prompts or system-setting writes are performed.
+
+The suite totals **108 checks**: 32 core, 8 Automation permission, 16 system and
+52 UI/intent checks. These checks do not establish live menu compatibility or
+CPU/RAM usage.
 
 `bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
 
@@ -315,7 +341,8 @@ The automated dimming checks use fake Accessibility, tracking, rendering and set
 
 - Start the packaged app intentionally; verify Accessibility is requested only when missing and denial leaves Automation-backed controls usable. Grant/revoke it and Refresh; verify dimming hides/resumes correctly.
 - With Stage Manager on, switch between both focus checkboxes in the window and menu. Verify only one is enabled and Monk Mode follows the last choice after both are turned off and after restarting.
-- Switch between windows of the same app and different apps, including Safari, Finder, AppKit and Electron apps. Check sheets, menus, floating palettes, close/minimize and an app with no windows. Missing or ambiguous focus must remove the overlay.
+- Switch between windows of the same app and different apps, including Safari, Finder, AppKit and Electron apps. Check sheets, menus, floating palettes, close/minimize and an app with no windows. Ambiguous focus, disappearance of the anchor and switching to a different regular app without a valid window must remove the overlay. Temporarily missing AX focus may retain an already identified normal window that is still on screen in the same app or behind an accessory menu. Closing/minimizing the anchor, Space/display changes, permission loss and disabling dimming clear it.
+- Open MonkShift's menu, File/Edit menus, third-party menu bar utilities (including Stats) and system menus (including Wi-Fi and Control Center); leave each open for several seconds, enter submenus and dismiss with Escape or an outside click. Reopen the same menu and alternate between different menus at least six times without clicking the document between them. Dimming must remain at the chosen intensity below the last document window, with menus above it, including when the host sends no menu notification or temporarily cannot answer AX requests. Accessory popups without a native close control, including normal-level custom NSWindows, must not replace the document anchor; an actual closable settings window may become the new anchor. Open a new window from a menu and verify reanchoring without a flash. Close/minimize the retained document and verify no orphan layer remains. Verify each utility live; fake checks do not establish OS compatibility.
 - Exercise Stage Manager groups, Mission Control, Spaces, full screen, Reduce Motion, multiple displays with separate Spaces, display hot-plug and mixed scaling. Check clicks and drag-and-drop pass through without focus theft. No compatibility claim is established until these checks pass on each supported macOS version.
 - Verify 0%, 50% and 90%, independent grayscale/dimming sliders, rapid switching, exact restoration, failed restore retry, and exit/relaunch behavior.
 - Measure release-build MonkShift and WindowServer CPU/RAM plus GPU activity with dimming off/on, both idle and during focus changes, dragging and background video. Record hardware, macOS version, display resolution/scaling and display count.

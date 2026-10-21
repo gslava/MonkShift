@@ -137,6 +137,16 @@ private func require(_ condition: Bool, _ message: String) throws {
         NSApp.setActivationPolicy(.prohibited)
         let checks: [(String, @MainActor () async throws -> Void)] = [
             ("Focus handoff retains the layer until its new anchor is ready", DimmingChecks.testFocusHandoffKeepsTheLayerVisible),
+            ("Menus retain the layer and allow new window focus", DimmingChecks.testMenuKeepsLayerAndAcceptsNewWindow),
+            ("Slow AX menu replies without notifications retain the visible anchor", DimmingChecks.testMenuWithoutNotificationsRetainsVisibleWindow),
+            ("Explicit menu events survive a missing inferred menu", DimmingChecks.testExplicitMenusSurviveMissingInferredMenu),
+            ("Unresolved AX reads preserve confirmed history for the next menu", DimmingChecks.testUnresolvedReadingKeepsConfirmedHistoryForNextMenu),
+            ("Repeated menus without document refocus keep the layer visible", DimmingChecks.testRepeatedMenusWithoutDocumentRefocus),
+            ("Accessory popups at normal level preserve the document anchor", DimmingChecks.testAccessoryPopupDoesNotBecomeDocumentAnchor),
+            ("Visible anchor retention rejects stale and ambiguous focus", DimmingChecks.testVisibleWindowRetentionRejectsStaleOrAmbiguousFocus),
+            ("Closing a menu bounds missing focus retention", DimmingChecks.testMenuCloseExpiresMissingFocus),
+            ("Menus never delay unsafe transitions or disable", DimmingChecks.testMenuDoesNotDelayUnsafeChanges),
+            ("Nested menus and transient panels exclude persistent status icons", DimmingChecks.testNestedMenuSourcesAndDetection),
             ("Focus handoff removes unknown focus after its bounded deadline", DimmingChecks.testFocusHandoffDeadlineRemovesUnknownFocus),
             ("Space changes and permission loss bypass focus handoff delay", DimmingChecks.testUnsafeFocusChangesClearImmediately),
             ("Dimming validation waits for WindowServer publication", DimmingChecks.testDeferredWindowServerPublication),

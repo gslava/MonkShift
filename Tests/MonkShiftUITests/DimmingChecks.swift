@@ -1,13 +1,16 @@
 import AppKit
+import ApplicationServices
 import MonkShiftCore
 
 @MainActor private final class TrackingFixture: DimmingTracking {
     var onChange: ((DimmingTarget?) -> Void)?
     var onFocusChangeStarted: ((Bool) -> Void)?
+    var onMenuTrackingChanged: ((Bool) -> Void)?
     var starts = 0
     var stops = 0
+    var refreshes = 0
     func start() { starts += 1 }
-    func refresh() {}
+    func refresh() { refreshes += 1 }
     func stop() { stops += 1 }
 }
 
@@ -87,6 +90,245 @@ import MonkShiftCore
             "A cancelled handoff timer hid the new window's layer")
         try check(f.tracker.starts == 1 && f.saved.count == 1, "Focus handoff restarted tracking or wrote user preferences")
         try await f.service.set(enabled: false)
+    }
+
+    static func testMenuKeepsLayerAndAcceptsNewWindow() async throws {
+        let f = DimmingFixture(), gate = TransitionGate()
+        f.transitionWait = { try await gate.wait() }
+        try await f.service.set(enabled: true, intensity: 0.65)
+        await f.focus(f.target)
+        f.renderer.events.removeAll()
+        f.tracker.onFocusChangeStarted?(false)
+        try await until { gate.waiting }
+        f.tracker.onMenuTrackingChanged?(true)
+        gate.release()
+        await f.focus(nil)
+        f.tracker.onFocusChangeStarted?(false)
+        await f.focus(nil)
+        try check(f.renderer.target == f.target && f.renderer.intensity == 0.65 && !f.renderer.events.contains("hide"),
+            "Opening a menu did not cancel the old focus deadline and retain the layer/intensity")
+        let next = DimmingTarget(windowID: 43, bounds: f.target.bounds)
+        await f.focus(next)
+        try check(f.renderer.target == next && !f.renderer.events.contains("hide"),
+            "A menu prevented anchoring to a newly opened real window")
+        f.tracker.onMenuTrackingChanged?(false)
+        try await until { gate.waiting }
+        await f.focus(next)
+        gate.release()
+        await f.focus(next)
+        try check(f.renderer.target == next && f.tracker.refreshes == 1 && f.saved.count == 1,
+            "Closing a menu hid valid focus, failed to refresh, or changed saved preferences")
+        try await f.service.set(enabled: false)
+    }
+
+    static func testMenuCloseExpiresMissingFocus() async throws {
+        let f = DimmingFixture(), gate = TransitionGate()
+        f.transitionWait = { try await gate.wait() }
+        try await f.service.set(enabled: true)
+        await f.focus(f.target)
+        f.tracker.onMenuTrackingChanged?(true)
+        await f.focus(nil)
+        f.tracker.onMenuTrackingChanged?(false)
+        try await until { gate.waiting }
+        await f.focus(nil)
+        try check(f.renderer.target == f.target, "Menu close hid the layer before focus could recover")
+        gate.release()
+        try await until { f.renderer.target == nil }
+        try check(f.tracker.refreshes == 1 && f.service.state.enabled,
+            "Menu close failed to refresh focus or forgot the enabled preference")
+        try await f.service.set(enabled: false)
+    }
+
+    static func testMenuWithoutNotificationsRetainsVisibleWindow() async throws {
+        let f = DimmingFixture(), gate = TransitionGate()
+        f.transitionWait = { try await gate.wait() }
+        try await f.service.set(enabled: true, intensity: 0.7)
+        await f.focus(f.target)
+        f.renderer.events.removeAll()
+        let retention = DimmingFocusRetention(pid: 123, target: f.target)
+        let windows = [WindowMetadata(id: f.target.windowID, pid: 123, layer: 0, bounds: f.target.bounds)]
+        for (pid, transient) in [(pid_t(123), false), (pid_t(456), true)] {
+            f.tracker.onFocusChangeStarted?(false)
+            try await until { gate.waiting }
+            let visible = retention.visibleTarget(frontmostPID: pid, transientApplication: transient, windows: windows)
+            // The metadata preflight must cancel the deadline before slow AX IPC.
+            await f.focus(visible)
+            gate.release()
+            let resolved = DimmingFocusRetention.resolve(focused: nil, retained: visible,
+                canRetainWindow: true, menuActive: false)
+            await f.focus(resolved)
+            try check(f.renderer.target == f.target && f.renderer.intensity == 0.7 && !f.renderer.events.contains("hide"),
+                "A slow/no-window AX reply hid a visible anchor without a menu notification")
+        }
+        try check(f.tracker.starts == 1 && f.saved.count == 1, "Menu fallback restarted observers or wrote preferences")
+        try await f.service.set(enabled: false)
+    }
+
+    static func testExplicitMenusSurviveMissingInferredMenu() async throws {
+        let f = DimmingFixture(), native = NSMenu()
+        for nativeSource in [true, false] {
+            var focus = DimmingFocusState()
+            _ = focus.completeReading(pid: 123, focused: f.target, retained: nil, canRetainWindow: true, inferredMenu: false)
+            if nativeSource { focus.menus.nativeMenus.insert(ObjectIdentifier(native)) }
+            else { focus.menus.accessibilityMenus.insert(42) }
+            let resolved = focus.completeReading(pid: 123, focused: nil, retained: f.target,
+                canRetainWindow: false, inferredMenu: false)
+            try check(resolved == f.target && focus.anchor?.target == f.target,
+                "A transient AX reading discarded the anchor while an explicit menu was still open")
+        }
+    }
+
+    static func testUnresolvedReadingKeepsConfirmedHistoryForNextMenu() async throws {
+        let f = DimmingFixture()
+        var focus = DimmingFocusState()
+        _ = focus.completeReading(pid: 123, focused: f.target, retained: nil, canRetainWindow: true, inferredMenu: false)
+        let unresolved = focus.completeReading(pid: 123, focused: nil, retained: f.target,
+            canRetainWindow: false, inferredMenu: false)
+        try check(unresolved == nil, "An ambiguous non-menu reading should still pause the effect")
+        try check(focus.anchor?.target == f.target, "An unresolved AX reading erased confirmed window history before the next click")
+        let windows = [WindowMetadata(id: f.target.windowID, pid: 123, layer: 0, bounds: f.target.bounds)]
+        let retained = focus.anchor?.visibleTarget(frontmostPID: 123, transientApplication: false, windows: windows)
+        let nextMenu = focus.completeReading(pid: 123, focused: nil, retained: retained,
+            canRetainWindow: true, inferredMenu: false)
+        try check(nextMenu == f.target, "The second menu could not recover the still-visible document anchor")
+        try check(focus.anchor?.visibleTarget(frontmostPID: 456, transientApplication: false, windows: windows) == nil &&
+            focus.anchor?.visibleTarget(frontmostPID: 123, transientApplication: false, windows: []) == nil,
+            "Preserved history bypassed regular-app ownership or window visibility checks")
+    }
+
+    static func testRepeatedMenusWithoutDocumentRefocus() async throws {
+        let f = DimmingFixture(), gate = TransitionGate(), native = NSMenu()
+        f.transitionWait = { try await gate.wait() }
+        var focus = DimmingFocusState()
+        let windows = [WindowMetadata(id: f.target.windowID, pid: 123, layer: 0, bounds: f.target.bounds)]
+        _ = focus.completeReading(pid: 123, focused: f.target, retained: nil, canRetainWindow: true, inferredMenu: false)
+        try await f.service.set(enabled: true)
+        await f.focus(f.target)
+        f.renderer.events.removeAll()
+        focus.menus.nativeMenus.insert(ObjectIdentifier(native))
+        f.tracker.onMenuTrackingChanged?(true)
+        for index in 0..<6 {
+            focus.menus.clear()
+            f.tracker.onMenuTrackingChanged?(false)
+            try await until { gate.waiting }
+            if index.isMultiple(of: 2) { focus.menus.accessibilityMenus.insert(42) }
+            else { focus.menus.nativeMenus.insert(ObjectIdentifier(native)) }
+            f.tracker.onMenuTrackingChanged?(true)
+            let pid: pid_t = index.isMultiple(of: 2) ? 456 : 123
+            let retained = focus.anchor?.visibleTarget(frontmostPID: pid, transientApplication: pid != 123, windows: windows)
+            let resolved = focus.completeReading(pid: pid, focused: nil, retained: retained,
+                canRetainWindow: false, inferredMenu: false)
+            await f.focus(resolved)
+            gate.release()
+            await f.focus(resolved)
+            try check(f.renderer.target == f.target && focus.anchor?.pid == 123 && !f.renderer.events.contains("hide"),
+                "Switching/reopening menus without document refocus lost the anchor or let a stale deadline hide it")
+        }
+        try check(f.tracker.starts == 1 && f.saved.count == 1, "Repeated menus restarted tracking or changed preferences")
+        try await f.service.set(enabled: false)
+    }
+
+    static func testAccessoryPopupDoesNotBecomeDocumentAnchor() async throws {
+        // Stats 3.0.21 uses a titled, non-closable NSWindow for its menu popup.
+        // These windows are level zero and pass geometry-only focus matching.
+        let popup = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 300, height: 400),
+            styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: true)
+        let settings = NSWindow(contentRect: popup.frame,
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: true)
+        popup.isReleasedWhenClosed = false
+        settings.isReleasedWhenClosed = false
+        defer { popup.close(); settings.close() }
+        try check(popup.accessibilityCloseButton() == nil && settings.accessibilityCloseButton() != nil,
+            "Native popup/settings fixture did not expose the expected close-control distinction")
+        for (window, expectedTransient) in [(popup, true), (settings, false)] {
+            let transient = DimmingWindowClassification.isTransient(role: window.accessibilityRole()?.rawValue,
+                subrole: window.accessibilitySubrole()?.rawValue, accessoryApplication: true,
+                hasCloseButton: window.accessibilityCloseButton() != nil)
+            try check(transient == expectedTransient, "An accessory popup became a document anchor or a real settings window was rejected")
+        }
+        try check(!DimmingWindowClassification.isTransient(role: kAXWindowRole, subrole: kAXStandardWindowSubrole,
+            accessoryApplication: false, hasCloseButton: false), "A regular app's custom window was treated as a menu")
+        try check(DimmingWindowClassification.isTransient(role: kAXPopoverRole, subrole: nil,
+            accessoryApplication: false, hasCloseButton: true), "A normal-level popover was treated as a document")
+    }
+
+    static func testVisibleWindowRetentionRejectsStaleOrAmbiguousFocus() async throws {
+        let f = DimmingFixture()
+        let retention = DimmingFocusRetention(pid: 123, target: f.target)
+        let visible = WindowMetadata(id: f.target.windowID, pid: 123, layer: 0, bounds: f.target.bounds)
+        try check(retention.visibleTarget(frontmostPID: 456, transientApplication: false, windows: [visible]) == nil,
+            "Switching to a different regular app reused the old window")
+        for windows in [[], [WindowMetadata(id: 99, pid: 123, layer: 0, bounds: visible.bounds)],
+            [WindowMetadata(id: visible.id, pid: 456, layer: 0, bounds: visible.bounds)],
+            [WindowMetadata(id: visible.id, pid: 123, layer: 3, bounds: visible.bounds)]] {
+            try check(retention.visibleTarget(frontmostPID: 123, transientApplication: false, windows: windows) == nil,
+                "An invisible/foreign/non-normal anchor survived retention")
+        }
+        try check(DimmingFocusRetention.resolve(focused: nil, retained: f.target, canRetainWindow: false, menuActive: false) == nil,
+            "Ambiguous focused-window metadata reused the old anchor")
+        let popup = WindowMetadata(id: 99, pid: 456, layer: Int(CGWindowLevelForKey(.statusWindow)), bounds: visible.bounds)
+        try check(DimmingFocusRetention.isElevatedFocus(pid: 456, bounds: popup.bounds, windows: [visible, popup]),
+            "A focused system popup at status level was treated as an unknown document")
+        let normal = WindowMetadata(id: 100, pid: 456, layer: 0, bounds: popup.bounds)
+        try check(!DimmingFocusRetention.isElevatedFocus(pid: 456, bounds: normal.bounds, windows: [popup, normal, normal]),
+            "An elevated window concealed ambiguous normal-level focus")
+        try check(!DimmingFocusRetention.isElevatedFocus(pid: 789, bounds: popup.bounds, windows: [popup]),
+            "Another application's popup was treated as the focused window")
+        let next = DimmingTarget(windowID: 43, bounds: visible.bounds)
+        try check(DimmingFocusRetention.resolve(focused: next, retained: f.target, canRetainWindow: true, menuActive: true) == next,
+            "Menu retention prevented moving below a confirmed new window")
+    }
+
+    static func testMenuDoesNotDelayUnsafeChanges() async throws {
+        for reason in 0..<4 {
+            let f = DimmingFixture()
+            try await f.service.set(enabled: true)
+            await f.focus(f.target)
+            f.tracker.onMenuTrackingChanged?(true)
+            await f.focus(nil)
+            if reason == 0 { f.tracker.onFocusChangeStarted?(true) }
+            if reason == 1 { f.trusted = false }
+            if reason == 2 { f.conflict = true }
+            if reason == 3 { try await f.service.set(enabled: false) }
+            _ = await f.service.read()
+            try check(f.renderer.target == nil,
+                "An open menu delayed Space reset, permission loss, grouping conflict or explicit disable")
+            try await f.service.set(enabled: false)
+        }
+    }
+
+    static func testNestedMenuSourcesAndDetection() async throws {
+        let first = NSMenu(), second = NSMenu()
+        var menus = DimmingMenuState()
+        menus.nativeMenus.insert(ObjectIdentifier(first))
+        menus.nativeMenus.insert(ObjectIdentifier(second))
+        menus.accessibilityMenus.insert(42)
+        menus.nativeMenus.remove(ObjectIdentifier(first))
+        try check(menus.active, "Closing a parent menu prematurely ended nested tracking")
+        menus.nativeMenus.remove(ObjectIdentifier(second))
+        try check(menus.active, "Native menu close discarded external menu tracking")
+        menus.clearExternal()
+        try check(!menus.active, "Detached external app left stale menu tracking")
+        menus.inferredMenu = true
+        menus.clear()
+        try check(!menus.active, "Space reset retained inferred menu state")
+        for role in [kAXMenuRole, kAXMenuItemRole, kAXPopoverRole] {
+            try check(DimmingMenuDetection.isMenu(role: role, transientApplication: false, layers: []),
+                "AX menu/popover focus was treated as a missing document window")
+        }
+        let popup = Int(CGWindowLevelForKey(.popUpMenuWindow))
+        let floating = Int(CGWindowLevelForKey(.floatingWindow))
+        try check(DimmingMenuDetection.isMenu(role: nil, transientApplication: false, layers: [popup]),
+            "A native popup menu was not recognized")
+        try check(DimmingMenuDetection.isMenu(role: nil, transientApplication: true, layers: [floating]),
+            "An accessory application's transient panel was not recognized")
+        for transient in [false, true] {
+            try check(!DimmingMenuDetection.isMenu(role: nil, transientApplication: transient,
+                layers: [Int(CGWindowLevelForKey(.statusWindow)), Int(CGWindowLevelForKey(.mainMenuWindow))]),
+                "A permanent menu bar/status icon was mistaken for an open menu")
+        }
+        try check(!DimmingMenuDetection.isMenu(role: kAXWindowRole, transientApplication: false, layers: [floating]),
+            "A regular application's floating window was mistaken for a menu")
     }
 
     static func testFocusHandoffDeadlineRemovesUnknownFocus() async throws {

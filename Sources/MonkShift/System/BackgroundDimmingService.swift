@@ -9,6 +9,7 @@ struct DimmingTarget: Equatable, Sendable {
 @MainActor protocol DimmingTracking: AnyObject {
     var onChange: ((DimmingTarget?) -> Void)? { get set }
     var onFocusChangeStarted: ((Bool) -> Void)? { get set }
+    var onMenuTrackingChanged: ((Bool) -> Void)? { get set }
     func start()
     func refresh()
     func stop()
@@ -46,6 +47,7 @@ extension DimmingRendering {
     private var focusTransition: Task<Void, Never>?
     private var transitionID: UUID?
     private let transitionWait: () async throws -> Void
+    private var menuTracking = false
 
     init(state: State = State(enabled: false, intensity: 0.5), tracker: any DimmingTracking,
         renderer: any DimmingRendering, trusted: @escaping () -> Bool,
@@ -61,6 +63,7 @@ extension DimmingRendering {
         tracker.onFocusChangeStarted = { [weak self] clearImmediately in
             guard let self else { return }
             if clearImmediately {
+                self.menuTracking = false
                 self.cancelFocusTransition()
                 self.revision += 1
                 self.target = nil
@@ -71,11 +74,12 @@ extension DimmingRendering {
             guard let self else { return }
             // During activation AX can temporarily report no focused window. Keep
             // the existing layer until a replacement arrives or the deadline ends.
-            if target == nil, self.transitionID != nil { return }
+            if target == nil, self.transitionID != nil || self.menuTracking { return }
             self.cancelFocusTransition()
             self.target = target
             Task { @MainActor [weak self] in await self?.update() }
         }
+        tracker.onMenuTrackingChanged = { [weak self] active in self?.setMenuTracking(active) }
     }
 
     static func clamp(_ intensity: Double) -> Double { intensity.isFinite ? min(0.9, max(0, intensity)) : 0.5 }
@@ -108,6 +112,7 @@ extension DimmingRendering {
 
     /// Exit hides the transient effect without changing the saved user preference.
     func shutdown() {
+        menuTracking = false
         cancelFocusTransition()
         revision += 1
         tracker.stop()
@@ -117,7 +122,7 @@ extension DimmingRendering {
     }
 
     private func beginFocusTransition() {
-        guard state.enabled, target != nil, transitionID == nil else { return }
+        guard state.enabled, target != nil, transitionID == nil, !menuTracking else { return }
         revision += 1
         renderer.prepareForFocusChange()
         let id = UUID()
@@ -132,6 +137,20 @@ extension DimmingRendering {
             target = nil
             await update()
         }
+    }
+
+    private func setMenuTracking(_ active: Bool) {
+        guard menuTracking != active else { return }
+        menuTracking = active
+        if active {
+            cancelFocusTransition()
+            revision += 1
+            renderer.prepareForFocusChange()
+        } else {
+            beginFocusTransition()
+            tracker.refresh()
+        }
+        Task { @MainActor [weak self] in await self?.update() }
     }
 
     private func cancelFocusTransition() {
@@ -166,7 +185,8 @@ extension DimmingRendering {
             } else if let target {
                 try await renderer.show(below: target, intensity: state.intensity)
                 guard currentRevision == revision else { return }
-                detail = "Dims behind the active window. Stops when MonkShift quits."
+                detail = menuTracking ? "Keeps the background dimmed while the menu is open." :
+                    "Dims behind the active window. Stops when MonkShift quits."
             } else {
                 renderer.hide()
                 detail = "Paused until an active window can be identified."

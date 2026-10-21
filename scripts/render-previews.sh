@@ -18,5 +18,9 @@ if "$MONK_UPDATE_README"; then
     cp build/previews/permission-light.png docs/images/permission-light.png
     cp build/previews/intensity-menu-active-light.png docs/images/intensity-menu-light.png
     cp build/previews/intensity-menu-off-dark.png docs/images/intensity-menu-off-dark.png
+    cp build/previews/focus-dimming-light.png docs/images/focus-dimming-light.png
+    cp build/previews/focus-dimming-dark.png docs/images/focus-dimming-dark.png
+    cp build/previews/dimming-menu-active-light.png docs/images/dimming-menu-light.png
+    cp build/previews/dimming-menu-off-dark.png docs/images/dimming-menu-off-dark.png
     echo "Updated fixture screenshots in docs/images."
 fi

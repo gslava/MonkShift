@@ -1,6 +1,16 @@
 import MonkShiftCore
 
 @MainActor final class FeatureSummaryTests {
+    func testSummaryIncludesOnlyTheSelectedFocusMode() async throws {
+        var observed = states(enabled: true)
+        observed[.dimBackground] = FeatureState(enabled: false, available: false)
+        await expectEqual(FeatureSummary(states: observed).status, .allEnabled)
+        await expectEqual(FeatureSummary(states: observed).totalCount, Feature.allCases.count - 1)
+        await expectEqual(FeatureSummary(states: observed, focusMode: .dimBackground).unavailableCount, 1)
+        observed[.oneWindowAtATime] = FeatureState(enabled: false)
+        observed[.dimBackground] = FeatureState(enabled: true)
+        await expectEqual(FeatureSummary(states: observed, focusMode: .dimBackground).status, .allEnabled)
+    }
     private func states(enabled: Bool) -> [Feature: FeatureState] {
         Dictionary(uniqueKeysWithValues: Feature.allCases.map { ($0, FeatureState(enabled: enabled)) })
     }

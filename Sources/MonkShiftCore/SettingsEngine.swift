@@ -28,12 +28,18 @@ import Foundation
     public func set(_ feature: Feature, enabled: Bool, intensity: Double) async throws {
         try beginOperation()
         defer { operationInProgress = false }
-        if journal.individual[feature.rawValue] == nil && journal.monk[feature.rawValue] == nil {
-            var next = journal
-            next.individual[feature.rawValue] = try await backend.snapshot(feature)
-            try commit(next)
+        var next = journal
+        let affected = enabled ? [feature] + (feature.alternativeFocusMode.map { [$0] } ?? []) : [feature]
+        for affectedFeature in affected where next.individual[affectedFeature.rawValue] == nil && next.monk[affectedFeature.rawValue] == nil {
+            next.individual[affectedFeature.rawValue] = try await backend.snapshot(affectedFeature)
         }
+        try commit(next)
         if enabled {
+            if let alternative = feature.alternativeFocusMode {
+                let status = try await backend.read(feature)
+                guard status.available else { throw MonkError(status.detail ?? "This focus mode is unavailable.") }
+                try await backend.disable(alternative)
+            }
             try await backend.apply(feature, intensity: intensity)
         } else if let snapshot = journal.monk[feature.rawValue] ?? journal.individual[feature.rawValue] {
             try await backend.restore(feature, from: snapshot)
@@ -46,21 +52,38 @@ import Foundation
         }
     }
 
-    public func enableMonk(intensity: Double) async throws -> [OperationIssue] {
+    public func enableMonk(intensity: Double, focusMode: Feature = .oneWindowAtATime,
+        dimmingIntensity: Double = 0.5) async throws -> [OperationIssue] {
         try beginOperation()
         defer { operationInProgress = false }
         var next = journal
         var issues: [OperationIssue] = []
+        let selected = focusMode == .dimBackground ? Feature.dimBackground : .oneWindowAtATime
         for feature in Feature.allCases where next.monk[feature.rawValue] == nil {
             do {
-                let status = try await backend.read(feature)
-                guard status.available else { throw MonkError(status.detail ?? "Unavailable on this macOS version.") }
+                // The unselected mode still needs a baseline before it is disabled.
+                // Capturing our own overlay state does not require Accessibility.
+                if feature != selected.alternativeFocusMode {
+                    let status = try await backend.read(feature)
+                    guard status.available else { throw MonkError(status.detail ?? "Unavailable on this macOS version.") }
+                }
                 next.monk[feature.rawValue] = try await backend.snapshot(feature)
             } catch { issues.append(OperationIssue(feature, error)) }
         }
         try commit(next)
         for feature in Feature.allCases where journal.monk[feature.rawValue] != nil {
-            do { try await backend.apply(feature, intensity: intensity) }
+            if feature == selected.alternativeFocusMode { continue }
+            do {
+                if let alternative = feature.alternativeFocusMode {
+                    let status = try await backend.read(feature)
+                    guard status.available else { throw MonkError(status.detail ?? "This focus mode is unavailable.") }
+                    guard journal.monk[alternative.rawValue] != nil else {
+                        throw MonkError("Could not save the other focus mode. Neither mode was changed.")
+                    }
+                    try await backend.disable(alternative)
+                }
+                try await backend.apply(feature, intensity: feature == .dimBackground ? dimmingIntensity : intensity)
+            }
             catch { issues.append(OperationIssue(feature, error)) }
         }
         try await backend.finishChanges()
@@ -80,7 +103,9 @@ import Foundation
 
     private func restoreRecords(monk: Bool) async -> [OperationIssue] {
         var issues: [OperationIssue] = []
-        for feature in Feature.allCases.reversed() {
+        // Restore the system grouping preference before resuming an earlier overlay.
+        let order = Feature.allCases.reversed().filter { $0.alternativeFocusMode == nil } + [.oneWindowAtATime, .dimBackground]
+        for feature in order {
             guard let data = (monk ? journal.monk : journal.individual)[feature.rawValue] else { continue }
             do {
                 try await backend.restore(feature, from: data)

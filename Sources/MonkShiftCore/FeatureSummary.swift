@@ -11,13 +11,14 @@ public struct FeatureSummary {
     public let unavailableCount: Int
     public let totalCount: Int
 
-    public init(states: [Feature: FeatureState]) {
-        totalCount = Feature.allCases.count
-        enabledCount = Feature.allCases.filter {
+    public init(states: [Feature: FeatureState], focusMode: Feature = .oneWindowAtATime) {
+        let features = Feature.allCases.filter { $0 != focusMode.alternativeFocusMode }
+        totalCount = features.count
+        enabledCount = features.filter {
             states[$0]?.available == true && states[$0]?.enabled == true
         }.count
-        unavailableCount = Feature.allCases.filter { states[$0]?.available == false }.count
-        unknownCount = Feature.allCases.filter {
+        unavailableCount = features.filter { states[$0]?.available == false }.count
+        unknownCount = features.filter {
             states[$0] == nil || (states[$0]?.available == true && states[$0]?.enabled == nil)
         }.count
     }

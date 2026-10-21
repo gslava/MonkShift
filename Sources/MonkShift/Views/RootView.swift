@@ -35,6 +35,7 @@ struct PermissionView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Allow control of System Events").font(.headline)
                 Text("MonkShift needs Automation permission to read and change your Dock and menu bar settings. macOS will ask you to allow access to System Events.")
+                Text("Accessibility is requested at startup for background dimming. You can use the other controls without it.")
                 Text("No accounts, analytics, network requests, screen recording, or keyboard monitoring. Your saved settings stay on this Mac.")
                     .foregroundStyle(.secondary)
             }
@@ -75,13 +76,13 @@ struct ControlsView: View {
                 Button { model.toggleMonk() } label: {
                     HStack {
                         Image(systemName: model.displayedHasSession ? "arrow.uturn.backward" : "circle.lefthalf.filled")
-                        Text(model.displayedHasSession ? "Disable Monk Mode · Restore Previous Settings" : "Monk Mode · Enable All")
+                        Text(model.displayedHasSession ? "Disable Monk Mode · Restore Previous Settings" : "Monk Mode · Enable Selected Settings")
                         Spacer()
                     }
                     .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large).disabled(!model.canChange)
-                Text(model.hasSession ? "Your previous settings are saved. Quitting keeps the current settings." : "Previous settings are saved before changes are applied.")
+                Text(model.hasSession ? "Previous settings are saved. Background dimming stops when MonkShift quits." : "Previous settings are saved before changes are applied.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             .padding(24)
@@ -92,7 +93,8 @@ struct ControlsView: View {
                         Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).textSelection(.enabled)
                     }
                     group("Dock & Menu Bar", features: [.instantDock, .hideDock, .hideMenuBar])
-                    group("Stage Manager", features: [.stageManager, .hideRecentApps, .oneWindowAtATime])
+                    group("Stage Manager", features: [.stageManager, .hideRecentApps])
+                    DimmingControlsView(model: model)
                     group("Display", features: [.hideDesktopItems, .reduceMotion, .blackWallpaper, .grayscale])
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -140,6 +142,46 @@ struct ControlsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title).font(.headline)
             ForEach(features) { feature in FeatureRow(feature: feature, model: model) }
+        }
+    }
+}
+
+struct DimmingControlsView: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var accessibility: AccessibilityPermissionManager
+
+    init(model: AppModel) { self.model = model; accessibility = model.accessibility }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Window Focus").font(.headline)
+            FeatureRow(feature: .oneWindowAtATime, model: model)
+            FeatureRow(feature: .dimBackground, model: model)
+            Text("Choose either mode. Monk Mode uses your last choice: \(model.preferredFocusMode.title).")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !accessibility.granted {
+                HStack {
+                    Button("Allow Accessibility") { accessibility.request(); model.refresh() }
+                    Button("Open System Settings") { accessibility.openSettings() }
+                }
+                Text("Enable MonkShift in Privacy & Security → Accessibility, then press Refresh. Other controls remain available.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Text("Background dimming intensity")
+                Spacer()
+                Text("\(Int((model.dimmingIntensity * 100).rounded()))%")
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: $model.dimmingIntensity, in: 0...0.9) { editing in
+                model.isEditingDimmingIntensity = editing
+                if !editing { model.commitDimmingIntensity() }
+            }
+            .accessibilityLabel("Background dimming intensity")
+            .accessibilityValue("\(Int((model.dimmingIntensity * 100).rounded())) percent")
+            .disabled(!model.canAdjustDimmingIntensity)
+            Text("0–90%. Applied when you release the slider. 50% by default.")
+                .font(.callout).foregroundStyle(.secondary)
         }
     }
 }

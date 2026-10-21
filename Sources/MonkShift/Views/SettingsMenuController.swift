@@ -9,6 +9,7 @@ import MonkShiftCore
     private let quit: () -> Void
     private var items: [String: NSMenuItem] = [:]
     private var intensityView: GrayscaleIntensityMenuView?
+    private var dimmingIntensityView: GrayscaleIntensityMenuView?
 
     init(model: AppModel, showWindow: @escaping () -> Void, quit: @escaping () -> Void) {
         self.model = model
@@ -20,7 +21,7 @@ import MonkShiftCore
     }
 
     func update() {
-        guard !model.isEditingIntensity else { return }
+        guard !model.isEditingIntensity, !model.isEditingDimmingIntensity else { return }
         var rows: [NSMenuItem] = []
         rows.append(item("heading", "MonkShift · \(model.statusTitle)"))
         rows.append(item("detail", model.statusDetail))
@@ -29,7 +30,7 @@ import MonkShiftCore
         }
         rows.append(separator("headerSeparator"))
         if model.permissions.granted {
-            let monk = item("monk", model.displayedHasSession ? "Disable Monk Mode — Restore Previous" : "Monk Mode (Enable All)", #selector(toggleMonk))
+            let monk = item("monk", model.displayedHasSession ? "Disable Monk Mode — Restore Previous" : "Monk Mode (Enable Selected Settings)", #selector(toggleMonk))
             monk.isEnabled = model.canChange
             rows.append(monk)
             for feature in Feature.allCases {
@@ -42,6 +43,12 @@ import MonkShiftCore
                 row.toolTip = model.issue(for: feature) ?? state?.detail
                 rows.append(row)
                 if feature == .grayscale { rows.append(intensityControl()) }
+                if feature == .dimBackground {
+                    rows.append(dimmingIntensityControl())
+                    if !model.accessibility.granted {
+                        rows.append(item("accessibility", "Allow Accessibility for Dimming…", #selector(requestAccessibility)))
+                    }
+                }
             }
             rows.append(separator("controlsSeparator"))
             let restore = item("restore", "Restore All Changes", #selector(restoreAll))
@@ -109,6 +116,29 @@ import MonkShiftCore
         return row
     }
 
+    private func dimmingIntensityControl() -> NSMenuItem {
+        let row = item("dimmingIntensity", "Background dimming intensity · \(Int((model.dimmingIntensity * 100).rounded()))%")
+        if dimmingIntensityView == nil {
+            dimmingIntensityView = GrayscaleIntensityMenuView(intensity: model.dimmingIntensity,
+                enabled: model.canAdjustMenuDimmingIntensity, filterEnabled: model.displayedEnabled(.dimBackground) == true,
+                label: "Background dimming", maximum: 0.9, disabledHint: "Enable background dimming to adjust.",
+                onEditingChanged: { [weak model] editing in model?.isEditingDimmingIntensity = editing },
+                onCommit: { [weak self] intensity in
+                    guard let self else { return }
+                    if model.canAdjustMenuDimmingIntensity {
+                        model.dimmingIntensity = intensity
+                        model.commitDimmingIntensity()
+                    }
+                    update()
+                })
+            row.view = dimmingIntensityView
+        }
+        row.isEnabled = model.canAdjustMenuDimmingIntensity
+        dimmingIntensityView?.update(intensity: model.dimmingIntensity, enabled: model.canAdjustMenuDimmingIntensity,
+            filterEnabled: model.displayedEnabled(.dimBackground) == true)
+        return row
+    }
+
     @objc private func openWindow() { showWindow() }
     @objc private func toggleMonk() { model.toggleMonk() }
     @objc private func toggleFeature(_ sender: NSMenuItem) {
@@ -117,4 +147,5 @@ import MonkShiftCore
     }
     @objc private func restoreAll() { model.restoreAll() }
     @objc private func quitApp() { quit() }
+    @objc private func requestAccessibility() { showWindow(); model.accessibility.request() }
 }

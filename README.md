@@ -88,7 +88,7 @@ Developer ID, notarization and App Store distribution are outside this workflow.
 
 The first-launch screen explains the permission and displays the open-source/offline labels. Click **Grant Automation Permission**, then allow **System Events** in the macOS prompt. All system controls and global shortcut actions remain gated until this permission is granted. After denial, open System Settings → Privacy & Security → Automation → MonkShift and enable System Events, then click **Check Again**.
 
-Only Automation is requested. Dock/menu-bar control sends typed Apple Events against System Events' preferences dictionary; it does not automate mouse clicks in System Settings. Requests have a five-second timeout and run on a serial background queue. Preferences and color-filter operations run on a background actor; AppKit wallpaper/UI access stays on the main actor. Global shortcuts use Carbon registration, so Accessibility, Screen Recording and Input Monitoring permissions are not requested. Privacy state is checked again before every mutation. Revocation blocks later actions; a restore record remains available once permission is granted again.
+Automation controls the system settings. Dock/menu-bar control sends typed Apple Events against System Events' preferences dictionary; it does not automate mouse clicks in System Settings. Requests have a five-second timeout and run on a serial background queue. Preferences and color-filter operations run on a background actor; AppKit wallpaper/UI access stays on the main actor. Global shortcuts use Carbon registration. At normal startup, MonkShift also requests Accessibility if it is missing, solely to identify and observe the active window for background dimming. Denial leaves the other controls usable. Enable MonkShift under Privacy & Security → Accessibility and press Refresh after granting it. Screen Recording and Input Monitoring are not requested; window titles, screenshots and keystrokes are not read. Privacy state is checked again before every mutation. Revocation blocks later actions; a restore record remains available once permission is granted again.
 
 System Events can exit while idle. If a permission check reports that its target is not running, MonkShift starts it in the background and checks again without prompting. The menu updates when the check completes; consent is requested only through the onboarding button.
 
@@ -103,7 +103,7 @@ releases the lock on exit or a crash; an old PID file alone cannot block startup
 
 Every setting has a checkbox in the window and in the native menu bar menu. Status is refreshed when opening the menu/window, returning to MonkShift, changing the desktop Space while the window is visible, waking the Mac, and after applying settings. Use **Refresh** for changes made elsewhere. No repeating background polling is used.
 
-The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of ten. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. The summary stays visible during background work. A small activity indicator appears in a fixed space in the window only if work lasts longer than half a second. Operation errors appear separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
+The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of ten (the nine common settings plus the selected window-focus mode). The unselected focus mode is excluded from this count. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. The summary stays visible during background work. A small activity indicator appears in a fixed space in the window only if work lasts longer than half a second. Operation errors appear separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
 
 | Setting | Implementation and scope |
 | --- | --- |
@@ -112,7 +112,8 @@ The top of the window and menu shows **All enabled**, **Partially enabled**, **O
 | Hide menu bar | System Events → `autohide menu bar of dock preferences`. Auto-hides; reveal by moving to the top edge. |
 | Stage Manager | `com.apple.WindowManager` → `GloballyEnabled`. Requires “Displays have separate Spaces”; if disabled, MonkShift explains the prerequisite. |
 | Hide recent apps | `com.apple.WindowManager` → `AutoHide = true`. Only affects Stage Manager while it is enabled. |
-| One window at a time | `com.apple.WindowManager` → `AppWindowGroupingBehavior = 1`. Only affects Stage Manager. |
+| One window at a time | `com.apple.WindowManager` → `AppWindowGroupingBehavior = 1`. Only affects Stage Manager. Mutually exclusive with background dimming. |
+| Dim background windows | Native, click-through AppKit windows ordered immediately below the active normal-level window. AX/Workspace notifications identify focus; no screen capture, private window API, helper or polling. Independent 0–90% intensity. |
 | Hide desktop icons and widgets | `com.apple.WindowManager` → `StandardHideDesktopIcons`, `HideDesktop`, `StandardHideWidgets`, and `StageManagerHideWidgets` set to `1`. Hides both types of items on the desktop and in Stage Manager without restarting Finder. All four original values, including absent keys, are saved for restoration. |
 | Reduce Motion | System Accessibility → Display → Reduce Motion, through dynamically resolved `_AXInterfaceGetReduceMotionEnabled` / `_AXInterfaceSetReduceMotionEnabled`. Included in Monk Mode and restored to its saved enabled/disabled state. |
 | Black wallpaper | An 8 × 8 opaque black PNG generated locally, applied through `NSWorkspace` to each connected display in the current desktop Space. |
@@ -126,6 +127,28 @@ The grayscale slider is available in the window and **directly below the graysca
 </p>
 
 Menu control fixtures, shown separately from the surrounding native menu.
+
+**Window Focus** has two mutually exclusive checkboxes: **Show windows one at a time** and **Dim background windows**. Enabling one disables the other after both original states have been saved. Turning both off retains the last enabled choice for the next Monk Mode session; the choice survives a restart. The initial choice is One window at a time, preserving existing behavior. A failed selected mode is reported and does not silently select the other one.
+
+Background dimming has its own **0–90%** slider in the window and directly below its native menu checkbox, defaulting to 50%. It is independent of grayscale. Menu adjustment requires dimming to be enabled; the window can save an intensity while it is off. Dimming at 0% draws no layer. The overlay does not intercept mouse or keyboard input and has no blur or animation. One reusable window per connected display is positioned below the focused window; windows above that layer, such as floating palettes and menus, remain visible.
+
+<p>
+  <img src="docs/images/focus-dimming-light.png" width="280" alt="Mutually exclusive window focus controls and independent dimming slider">
+  <img src="docs/images/focus-dimming-dark.png" width="280" alt="Background dimming controls in dark appearance">
+</p>
+
+<p>
+  <img src="docs/images/dimming-menu-light.png" width="280" alt="Native background dimming menu slider">
+  <img src="docs/images/dimming-menu-off-dark.png" width="280" alt="Disabled background dimming menu slider">
+</p>
+
+After reordering, a bounded deferred validation waits for WindowServer to publish the new layer (up to three checks, 40 ms apart). This is only triggered by an actual layer change; there is no repeating background timer. Stale validations are cancelled on focus changes or disable. Decorative overlays are excluded from Accessibility, and their own window-created/main-window notifications are not observed.
+
+Ordinary app/window activation reuses the visible layer and reorders it directly under the replacement window. A temporary missing-focus result keeps the previous layer for at most 150 ms; a one-shot deadline removes it if no eligible window arrives. A replacement cancels that deadline, and there is no animation, extra layer or idle polling. Space/display changes and wake discard the old anchor immediately; permission loss and grouping conflicts bypass the grace period.
+
+The effect pauses when the active window cannot be identified unambiguously, ordering fails, or one-window mode is enabled externally. Accessibility loss hides the layer and stops tracking when detected at the next focus/refresh event. Settings changed outside MonkShift are rechecked on those events or with Refresh; there is no repeating check. Unsupported/ambiguous windows remain undimmed. The implementation uses only normal-level windows and matches public window metadata by process and frame; exact matches between overlapping same-sized windows are deliberately not guessed. Mission Control, full-screen transitions and Stage Manager animation behavior still require live validation.
+
+Dimming stops on exit or crash because the windows belong to MonkShift. Its enabled preference is retained and resumes on reopening once permission and an eligible active window are available. Original enabled state and intensity remain in the restore journal until successfully restored. The preferred slider value is stored separately from the temporary runtime intensity restored with a session.
 
 **Compatibility:** Dock, Stage Manager and desktop visibility preference keys, Reduce Motion setters and the color filter symbols are not stable public configuration APIs. Their actual visual effects require manual checks on each supported macOS version. Checkboxes read system preferences/API state, not screen pixels. A preference read-back confirms the stored value; it cannot prove the corresponding daemon rendered the effect. Missing symbols, failed writes and unknown states are shown explicitly. No SIP changes or administrator privileges are used.
 
@@ -152,9 +175,9 @@ behavior; it does not remove every animation. See Apple's
 
 ## Monk Mode and restoration
 
-**Monk Mode (Enable All)** first captures every available setting and writes the restore file atomically before making changes. It then applies the supported settings. Failures appear individually; an error does not count as successful application.
+**Monk Mode (Enable Selected Settings)** first captures every available setting, including both focus-mode baselines and writes the restore file atomically before making changes. It then applies the common supported settings and only the last selected focus mode. Failures appear individually; an error does not count as successful application.
 
-**Disable Monk Mode** restores exactly the saved state from immediately before that session, including prior filter type/enabled state/intensity and wallpaper URL/options. Quitting keeps the current system settings and the restore record. Opening MonkShift again lets you disable/restore the saved session.
+**Disable Monk Mode** restores exactly the saved state from immediately before that session, including prior filter type/enabled state/intensity and wallpaper URL/options. Quitting keeps the current system settings and the restore record; the transient dimming layer disappears until the next launch. Opening MonkShift again lets you disable/restore the saved session.
 
 Individual checkbox changes also save their first baseline. Unchecking restores that feature's saved configuration and ensures the feature is off. **Restore All Changes** restores the Monk session first, then the earlier individual baselines. This means a previously enabled system feature can be restored to enabled. Individual edits during a Monk session do not replace the session baseline.
 
@@ -178,7 +201,7 @@ Local data:
 ~/Library/Application Support/MonkShift/black.png
 ```
 
-Shortcuts and the preferred slider position live in the app's UserDefaults domain `app.monkshift.MonkShift`. Wallpaper restoration is limited to saved connected displays and their current desktop Space. Other Spaces, rotating wallpaper schedules, live/video wallpaper state, and displays attached after a snapshot are not managed. Keep original wallpaper files available until restoration. Independent system-setting edits made during a Monk session are overwritten when restoring that session, as expected from restoring its saved baseline.
+Shortcuts, the preferred focus mode, dimming enabled state and both preferred slider positions live in the app's UserDefaults domain `app.monkshift.MonkShift`. Wallpaper restoration is limited to saved connected displays and their current desktop Space. Other Spaces, rotating wallpaper schedules, live/video wallpaper state, and displays attached after a snapshot are not managed. Keep original wallpaper files available until restoration. Independent system-setting edits made during a Monk session are overwritten when restoring that session, as expected from restoring its saved baseline.
 
 ## Global shortcuts
 
@@ -211,20 +234,20 @@ records. Disable restores the saved baseline; settings that were enabled before
 the session can remain enabled afterward.
 
 Install the final bundle in `/Applications`, open it once and grant Automation
-permission before using these actions. A shortcut does not request consent on
-your behalf. Builds made with `--without-app-shortcuts` omit the discovery
+permission before using these actions. Automation consent is requested through
+onboarding; normal app startup can also ask for Accessibility when it is missing. Builds made with `--without-app-shortcuts` omit the discovery
 metadata and do not expose these actions. See Apple's
 [App Shortcuts documentation](https://developer.apple.com/documentation/appintents/app-shortcuts).
 
 ## Memory design
 
-The idle process retains one small model, native NSStatusItem/NSMenu, and Carbon shortcut registrations. Closing the window releases its SwiftUI hosting tree. There are no repeated timers, live previews, third-party frameworks, web views or helper daemons. macOS system processes such as Dock and universalaccessd are managed by macOS, not resident MonkShift helpers.
+The idle process retains one small model, native NSStatusItem/NSMenu, and Carbon shortcut registrations. Closing the window releases its SwiftUI hosting tree. There are no repeated timers, live previews, third-party frameworks, web views or helper daemons. While dimming is enabled, the app additionally retains AX/Workspace subscriptions and one reusable overlay per connected display. Disabling dimming releases its observers and windows. Move/resize events are not observed: the underlay does not need to follow window geometry. AX focus/geometry reads use a background actor with bounded messaging timeouts and coalesced requests. macOS system processes such as Dock and universalaccessd are managed by macOS, not resident MonkShift helpers.
 
-No fixed RAM claim is made until the release build is measured. To measure, launch the release app, grant permission, close the window, let it idle, then inspect **Memory** for MonkShift in Activity Monitor. Compare open-window and closed-window states. Shared framework pages and OS caches mean RSS and Activity Monitor's memory figure differ.
+No fixed RAM claim is made until the release build is measured. To measure, launch the release app, grant permission, close the window, let it idle, then inspect **Memory** for MonkShift in Activity Monitor. Compare open-window and closed-window states, dimming off/on, and one versus multiple displays. Also measure WindowServer memory/CPU and GPU activity: compositing costs may be charged outside MonkShift. Include stationary windows, repeated focus switching, window dragging and background video; no numeric performance claim is verified yet. Shared framework pages and OS caches mean RSS and Activity Monitor's memory figure differ.
 
 ## Verification
 
-`bash scripts/check.sh` runs 24 core checks against observed-state fixtures, a fake backend and temporary storage: aggregate status including unknown/unavailable settings, write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, file corruption/version handling, suspension/concurrent-operation guards, and failed finalization recovery. Reduce Motion checks include both original states, failed restoration through a file-store restart and legacy sessions without its snapshot. Legacy sessions also leave desktop visibility untouched when it was not captured. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
+`bash scripts/check.sh` runs 32 core checks against observed-state fixtures, a fake backend and temporary storage: aggregate status including unknown/unavailable settings, write-before-mutate, failed writes, repeated enables, partial apply/restore failures, restoration after restart, baseline ordering, edits during a session, pre-existing enabled features, file corruption/version handling, suspension/concurrent-operation guards, and failed finalization recovery. Reduce Motion checks include both original states, failed restoration through a file-store restart and legacy sessions without its snapshot. Legacy sessions also leave desktop visibility untouched when it was not captured. Focus-mode checks cover both baselines before switching, snapshot/disable failures, selected-mode intensity, denied selected versus unselected modes and old journals without dimming. It does not request privacy permissions or change macOS settings. A dependency-free Foundation runner is used because Command Line Tools do not include XCTest.
 
 The same script compiles the app's actual permission manager with a fake client and runs 8 additional checks: idle-target recovery, denied/missing/revoked consent, unavailable targets, launch failures, concurrent refreshes, and explicit request completion. No real services are started or privacy prompts requested by these checks.
 
@@ -242,7 +265,7 @@ worker. They cover all sixteen visibility combinations, invalid values, exact
 restoration of mixed Boolean/integer values and absent keys, ignored writes,
 durable snapshots before mutation, and partial restoration retried after restart.
 
-Twenty-six UI/intent checks use the actual app model and native menu with fake settings and
+Forty-two UI/intent checks use the actual app model and native menu with fake settings and
 permissions, isolated preferences/storage, and global shortcuts disabled. They
 cover input during refresh, rapid toggles, failed-change recovery, captured slider
 values, in-flight intensity reads, finalization errors, permission revocation,
@@ -253,7 +276,7 @@ initial refresh, denied/revoked permission, partial apply/restore errors,
 finalization failure and startup/shutdown behavior. Menu action checks verify
 that individual Reduce Motion and desktop visibility changes, Monk Mode and Restore All preserve their
 respective baselines.
-No real Apple Events, privacy prompts or system-setting writes are performed.
+Dimming checks also simulate delayed WindowServer publication, bounded genuine ordering failures, cancelled validation, uninterrupted focus handoff, deadline expiry and immediate clearing for unsafe transitions. No real Apple Events, privacy prompts or system-setting writes are performed.
 
 `bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
 
@@ -285,3 +308,14 @@ The build scripts do not launch MonkShift or change system settings. Real permis
 - [Apple: custom views in menu items](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/MenuList/Articles/ViewsInMenuItems.html).
 - API signatures/category/type and notification behavior were cross-checked against [brettferdosi/grayscale's API notes](https://github.com/brettferdosi/grayscale/blob/master/Sources/Bridge.h), system SDK exports and read-only runtime probes. No third-party runtime code is linked.
 - [Hexnode's Stage Manager configuration reference](https://www.hexnode.com/mobile-device-management/help/script-to-enable-disable-stage-manager-on-mac/) describes its configuration scripts and grouping values.
+
+### Background dimming manual checks
+
+The automated dimming checks use fake Accessibility, tracking, rendering and settings clients; they do not prove live ordering or resource usage. Before shipping:
+
+- Start the packaged app intentionally; verify Accessibility is requested only when missing and denial leaves Automation-backed controls usable. Grant/revoke it and Refresh; verify dimming hides/resumes correctly.
+- With Stage Manager on, switch between both focus checkboxes in the window and menu. Verify only one is enabled and Monk Mode follows the last choice after both are turned off and after restarting.
+- Switch between windows of the same app and different apps, including Safari, Finder, AppKit and Electron apps. Check sheets, menus, floating palettes, close/minimize and an app with no windows. Missing or ambiguous focus must remove the overlay.
+- Exercise Stage Manager groups, Mission Control, Spaces, full screen, Reduce Motion, multiple displays with separate Spaces, display hot-plug and mixed scaling. Check clicks and drag-and-drop pass through without focus theft. No compatibility claim is established until these checks pass on each supported macOS version.
+- Verify 0%, 50% and 90%, independent grayscale/dimming sliders, rapid switching, exact restoration, failed restore retry, and exit/relaunch behavior.
+- Measure release-build MonkShift and WindowServer CPU/RAM plus GPU activity with dimming off/on, both idle and during focus changes, dragging and background video. Record hardware, macOS version, display resolution/scaling and display count.

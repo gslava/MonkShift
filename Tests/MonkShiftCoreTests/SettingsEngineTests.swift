@@ -16,6 +16,9 @@ import MonkShiftCore
     var unavailable: Set<Feature> = []
     var failApply: Set<Feature> = []
     var failRestore: Set<Feature> = []
+    var failSnapshot: Set<Feature> = []
+    var failDisable: Set<Feature> = []
+    var intensities: [Feature: Double] = [:]
     var failFinish = false
     var writes = 0
     var beforeWrite: (() async -> Void)?
@@ -26,6 +29,7 @@ import MonkShiftCore
         FeatureState(enabled: values[feature] == applied, detail: "Unavailable", available: !unavailable.contains(feature))
     }
     func snapshot(_ feature: Feature) async throws -> Data {
+        if failSnapshot.contains(feature) { throw MonkError("Snapshot failed") }
         await beforeSnapshot?(feature)
         return values[feature] ?? initial
     }
@@ -33,9 +37,13 @@ import MonkShiftCore
         await beforeWrite?()
         writes += 1
         values[feature] = applied // Simulate a partial mutation before an OS error.
+        intensities[feature] = intensity
         if failApply.contains(feature) { throw MonkError("Apply failed") }
     }
-    func disable(_ feature: Feature) async throws { await beforeWrite?(); writes += 1; values[feature] = Data("off".utf8) }
+    func disable(_ feature: Feature) async throws {
+        if failDisable.contains(feature) { throw MonkError("Disable failed") }
+        await beforeWrite?(); writes += 1; values[feature] = Data("off".utf8)
+    }
     func restore(_ feature: Feature, from data: Data) async throws {
         if failRestore.contains(feature) { throw MonkError("Display disconnected") }
         await beforeWrite?()
@@ -46,6 +54,103 @@ import MonkShiftCore
 }
 
 @MainActor final class SettingsEngineTests {
+    func testFocusModesSaveBothBaselinesBeforeSwitching() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        backend.values[.oneWindowAtATime] = backend.applied
+        let engine = try SettingsEngine(backend: backend, store: store)
+        backend.beforeWrite = {
+            await expectEqual(store.journal.individual[Feature.oneWindowAtATime.rawValue], backend.applied)
+            await expectEqual(store.journal.individual[Feature.dimBackground.rawValue], backend.initial)
+        }
+        try await engine.set(.dimBackground, enabled: true, intensity: 0.7)
+        await expectEqual(try backend.read(.oneWindowAtATime).enabled, false)
+        await expectEqual(try backend.read(.dimBackground).enabled, true)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        await expectEqual(try backend.read(.dimBackground).enabled, false)
+        backend.beforeWrite = nil
+        await expectTrue(try await engine.restoreIndividual().isEmpty)
+        await expectEqual(backend.values[.oneWindowAtATime], backend.applied)
+        await expectEqual(backend.values[.dimBackground], backend.initial)
+    }
+
+    func testFocusSnapshotOrDisableFailurePreventsOtherModeEnabling() async throws {
+        for failSnapshot in [true, false] {
+            let backend = FakeBackend(), store = MemoryStore()
+            let engine = try SettingsEngine(backend: backend, store: store)
+            if failSnapshot { backend.failSnapshot = [.oneWindowAtATime] }
+            else { backend.failDisable = [.oneWindowAtATime] }
+            await expectThrows(try await engine.set(.dimBackground, enabled: true, intensity: 0.6))
+            await expectEqual(backend.writes, 0)
+            await expectEqual(try backend.read(.dimBackground).enabled, false)
+        }
+    }
+
+    func testMonkUsesSelectedModeAndIndependentIntensity() async throws {
+        for mode in [Feature.oneWindowAtATime, .dimBackground] {
+            let backend = FakeBackend(), store = MemoryStore()
+            let engine = try SettingsEngine(backend: backend, store: store)
+            await expectTrue(try await engine.enableMonk(intensity: 0.2, focusMode: mode, dimmingIntensity: 0.8).isEmpty)
+            await expectEqual(try backend.read(mode).enabled, true)
+            await expectEqual(try backend.read(mode.alternativeFocusMode!).enabled, false)
+            await expectEqual(backend.intensities[.grayscale], 0.2)
+            if mode == .dimBackground { await expectEqual(backend.intensities[.dimBackground], 0.8) }
+            _ = try await engine.enableMonk(intensity: 0.3, focusMode: mode.alternativeFocusMode!, dimmingIntensity: 0.7)
+            await expectEqual(store.journal.monk[mode.rawValue], backend.initial)
+            await expectTrue(try await engine.restoreMonk().isEmpty)
+            await expectEqual(backend.values[mode], backend.initial)
+        }
+    }
+
+    func testUnselectedDimmingPermissionDoesNotBlockMonkMode() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        backend.unavailable = [.dimBackground]
+        let engine = try SettingsEngine(backend: backend, store: store)
+        await expectTrue(try await engine.enableMonk(intensity: 0.5).isEmpty)
+        await expectEqual(try backend.read(.oneWindowAtATime).enabled, true)
+        await expectEqual(try backend.read(.dimBackground).enabled, false)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+    }
+
+    func testSelectedUnavailableModeDoesNotDisableExistingMode() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        backend.values[.oneWindowAtATime] = backend.applied
+        backend.unavailable = [.dimBackground]
+        let engine = try SettingsEngine(backend: backend, store: store)
+        let issues = try await engine.enableMonk(intensity: 0.5, focusMode: .dimBackground)
+        await expectEqual(issues.map(\.feature), [.dimBackground])
+        await expectEqual(backend.values[.oneWindowAtATime], backend.applied)
+        await expectEqual(try backend.read(.hideDock).enabled, true)
+    }
+
+    func testLegacyJournalWithoutDimmingRestoresAfterRestart() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        store.journal.monk[Feature.oneWindowAtATime.rawValue] = backend.initial
+        backend.values[.oneWindowAtATime] = backend.applied
+        let engine = try SettingsEngine(backend: backend, store: store)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+        await expectEqual(backend.values[.dimBackground], nil)
+    }
+
+    func testFocusRestoreFailureSurvivesFileStoreRestart() async throws {
+        for originalMode in [Feature.oneWindowAtATime, .dimBackground] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FocusRestore-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let url = directory.appendingPathComponent("restore.json")
+            let backend = FakeBackend()
+            backend.values[originalMode] = backend.applied
+            let engine = try SettingsEngine(backend: backend, store: FileRestoreStore(url: url))
+            try await engine.set(originalMode.alternativeFocusMode!, enabled: true, intensity: 0.8)
+            backend.failRestore = [originalMode]
+            await expectEqual(try await engine.restoreIndividual().map(\.feature), [originalMode])
+            let restarted = try SettingsEngine(backend: backend, store: FileRestoreStore(url: url))
+            await expectEqual(Set(restarted.journal.individual.keys), [originalMode.rawValue])
+            backend.failRestore = []
+            await expectTrue(try await restarted.restoreIndividual().isEmpty)
+            await expectEqual(backend.values[originalMode], backend.applied)
+            await expectEqual(try backend.read(originalMode.alternativeFocusMode!).enabled, false)
+        }
+    }
+
     func testReduceMotionSessionRestoresBothOriginalStates() async throws {
         for originallyEnabled in [false, true] {
             let backend = FakeBackend(), store = MemoryStore()

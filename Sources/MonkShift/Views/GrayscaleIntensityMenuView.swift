@@ -7,16 +7,26 @@ import AppKit
     private let title = NSTextField(labelWithString: "Grayscale intensity")
     private let hint = NSTextField(labelWithString: "")
     private let onCommit: (Double) -> Void
+    private let maximum: Double
+    private let enabledHint: String
+    private let disabledHint: String
 
     init(intensity: Double, enabled: Bool, filterEnabled: Bool,
+        label: String = "Grayscale intensity", maximum: Double = 1,
+        enabledHint: String = "Applied when you release the slider.",
+        disabledHint: String = "Enable grayscale to adjust intensity.",
         onEditingChanged: @escaping (Bool) -> Void, onCommit: @escaping (Double) -> Void) {
-        slider = MenuIntensitySlider(value: min(1, max(0, intensity)) * 100,
-            minValue: 0, maxValue: 100, target: nil, action: nil)
+        self.maximum = maximum
+        self.enabledHint = enabledHint
+        self.disabledHint = disabledHint
+        slider = MenuIntensitySlider(value: min(maximum, max(0, intensity)) * 100,
+            minValue: 0, maxValue: maximum * 100, target: nil, action: nil)
         self.onCommit = onCommit
         super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 88))
         autoresizingMask = [.width]
 
         title.font = .menuFont(ofSize: 13)
+        title.stringValue = label
         addSubview(title)
 
         percentage.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
@@ -28,8 +38,8 @@ import AppKit
         slider.action = #selector(valueChanged(_:))
         slider.onEditingChanged = onEditingChanged
         slider.onCommit = { [weak self] in self?.commit() }
-        slider.setAccessibilityLabel("Grayscale intensity, percent")
-        slider.toolTip = "0% is the lowest supported intensity. Turn grayscale off to remove the filter."
+        slider.setAccessibilityLabel(label + ", percent")
+        slider.toolTip = maximum == 1 ? "0% is the lowest supported intensity. Turn grayscale off to remove the filter." : "0% removes dimming; 90% is the maximum."
         addSubview(slider)
 
         hint.font = .systemFont(ofSize: 11)
@@ -60,11 +70,11 @@ import AppKit
 
     func update(intensity: Double, enabled: Bool, filterEnabled: Bool) {
         guard !slider.isTrackingMouse else { return }
-        slider.doubleValue = min(1, max(0, intensity)) * 100
+        slider.doubleValue = min(maximum, max(0, intensity)) * 100
         slider.isEnabled = enabled && filterEnabled
         title.textColor = slider.isEnabled ? .labelColor : .disabledControlTextColor
         percentage.textColor = title.textColor
-        hint.stringValue = filterEnabled ? "Applied when you release the slider." : "Enable grayscale to adjust intensity."
+        hint.stringValue = filterEnabled ? enabledHint : disabledHint
         updatePercentage()
     }
 

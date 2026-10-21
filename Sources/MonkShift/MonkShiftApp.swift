@@ -65,7 +65,7 @@ import MonkShiftCore
                 Task { @MainActor in self?.refreshIfVisible() }
             })
         }
-        model.refresh()
+        model.requestStartupPermissions()
         showWindow(nil)
     }
 
@@ -80,6 +80,7 @@ import MonkShiftCore
         return .terminateNow
     }
     func applicationWillTerminate(_ notification: Notification) {
+        model.shutdown()
         model.shortcuts.shutdown()
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         if let reopenObserver { DistributedNotificationCenter.default().removeObserver(reopenObserver) }

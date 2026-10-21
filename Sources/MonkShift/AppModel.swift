@@ -3,6 +3,7 @@ import MonkShiftCore
 
 @MainActor final class AppModel: ObservableObject {
     let permissions: PermissionManager
+    let accessibility: AccessibilityPermissionManager
     let shortcuts: ShortcutManager
     @Published private(set) var states: [Feature: FeatureState] = [:]
     @Published private(set) var issues: [OperationIssue] = []
@@ -11,9 +12,12 @@ import MonkShiftCore
     @Published private(set) var hasSession = false
     @Published private(set) var hasIndividualChanges = false
     @Published var intensity: Double
+    @Published var dimmingIntensity: Double
+    @Published private(set) var preferredFocusMode: Feature
     @Published private(set) var requestedValues: [Feature: Bool] = [:]
     @Published private(set) var requestedSession: Bool?
     var isEditingIntensity = false
+    var isEditingDimmingIntensity = false
     var onRefresh: (() -> Void)?
     private let backend: any ObservedSettingsBackend
     private let defaults: UserDefaults
@@ -22,7 +26,7 @@ import MonkShiftCore
     private var storageError: String?
     private enum Change {
         case setting(Feature, Bool, Double)
-        case monk(Bool, Double)
+        case monk(Bool, Double, Feature, Double)
         case restoreAll
     }
     private struct PendingChange {
@@ -32,6 +36,7 @@ import MonkShiftCore
     private var pendingChanges: [PendingChange] = []
     private var settledRefresh: Task<Void, Never>?
     private var intensityRevision = 0
+    private var dimmingRevision = 0
     private var quitRequested = false
     private var quitCompletion: (() -> Void)?
     var hasPendingChanges: Bool { !pendingChanges.isEmpty }
@@ -47,12 +52,17 @@ import MonkShiftCore
 
     init(directory: URL, backend: (any ObservedSettingsBackend)? = nil,
         permissions: PermissionManager? = nil, shortcuts: ShortcutManager? = nil,
+        accessibility: AccessibilityPermissionManager? = nil,
         defaults: UserDefaults = .standard) {
         self.permissions = permissions ?? PermissionManager()
+        let accessibility = accessibility ?? AccessibilityPermissionManager()
+        self.accessibility = accessibility
         self.shortcuts = shortcuts ?? ShortcutManager()
         self.defaults = defaults
         intensity = defaults.object(forKey: "intensity") == nil ? 0.5 : min(1, max(0, defaults.double(forKey: "intensity")))
-        self.backend = backend ?? MacSettingsBackend(directory: directory)
+        dimmingIntensity = BackgroundDimmingService.clamp(defaults.object(forKey: "dimmingIntensity") == nil ? 0.5 : defaults.double(forKey: "dimmingIntensity"))
+        preferredFocusMode = defaults.string(forKey: "preferredFocusMode") == Feature.dimBackground.rawValue ? .dimBackground : .oneWindowAtATime
+        self.backend = backend ?? MacSettingsBackend(directory: directory, accessibility: accessibility, defaults: defaults)
         do {
             engine = try SettingsEngine(backend: self.backend, store: FileRestoreStore(url: directory.appendingPathComponent("restore.json")))
         } catch {
@@ -61,6 +71,7 @@ import MonkShiftCore
         }
         updateJournalState()
         self.permissions.onUserCheckFinished = { [weak self] in self?.refresh() }
+        accessibility.onChange = { [weak self] in self?.onRefresh?() }
         self.shortcuts.onAction = { [weak self] action in
             guard let self else { return }
             if let feature = action.feature { self.toggle(feature) }
@@ -74,8 +85,12 @@ import MonkShiftCore
         canChange && states[.grayscale]?.available == true && states[.grayscale]?.enabled != nil
     }
     var canAdjustMenuIntensity: Bool { canAdjustIntensity && displayedEnabled(.grayscale) == true }
+    var canAdjustDimmingIntensity: Bool {
+        canChange && accessibility.granted && states[.dimBackground]?.available == true
+    }
+    var canAdjustMenuDimmingIntensity: Bool { canAdjustDimmingIntensity && displayedEnabled(.dimBackground) == true }
 
-    var summary: FeatureSummary { FeatureSummary(states: states) }
+    var summary: FeatureSummary { FeatureSummary(states: states, focusMode: preferredFocusMode) }
     var displayedHasSession: Bool { requestedSession ?? hasSession }
     func displayedEnabled(_ feature: Feature) -> Bool? { requestedValues[feature] ?? states[feature]?.enabled }
     var statusTitle: String {
@@ -93,10 +108,11 @@ import MonkShiftCore
     }
 
     func refresh() {
-        guard !quitRequested, !refreshing, !busy, !isEditingIntensity else { return }
+        guard !quitRequested, !refreshing, !busy, !isEditingIntensity, !isEditingDimmingIntensity else { return }
         refreshing = true
         Task { @MainActor in
             defer { refreshing = false; onRefresh?(); processChanges() }
+            accessibility.refresh()
             guard await permissions.refresh() else { shortcuts.deactivate(); states.removeAll(); return }
             shortcuts.activate()
             await readCurrentStates()
@@ -107,10 +123,16 @@ import MonkShiftCore
     private func readCurrentStates() async {
         let previousIntensity = intensity
         let previousIntensityRevision = intensityRevision
+        let previousDimmingRevision = dimmingRevision
+        let previousDimmingIntensity = dimmingIntensity
         var current: [Feature: FeatureState] = [:]
         for feature in Feature.allCases {
             do { current[feature] = try await backend.read(feature) }
             catch { current[feature] = FeatureState(enabled: nil, detail: error.localizedDescription, available: false) }
+        }
+        if !accessibility.granted {
+            current[.dimBackground] = FeatureState(enabled: false,
+                detail: "Allow Accessibility to dim background windows. Other controls remain available.", available: false)
         }
         states = current
         if current[.grayscale]?.enabled == true,
@@ -119,12 +141,21 @@ import MonkShiftCore
            intensityRevision == previousIntensityRevision, !hasQueuedIntensity {
             intensity = currentIntensity
         }
+        let queuedDimming = pendingChanges.dropFirst(busy ? 1 : 0).contains {
+            if case .setting(.dimBackground, _, _) = $0.change { return true }
+            if case .monk(true, _, .dimBackground, _) = $0.change { return true }
+            return false
+        }
+        if current[.dimBackground]?.enabled == true, !isEditingDimmingIntensity,
+            dimmingRevision == previousDimmingRevision, dimmingIntensity == previousDimmingIntensity, !queuedDimming {
+            dimmingIntensity = BackgroundDimmingService.clamp(backend.dimmingIntensity())
+        }
     }
 
     private var hasQueuedIntensity: Bool {
         pendingChanges.dropFirst(busy ? 1 : 0).contains {
             if case .setting(.grayscale, _, _) = $0.change { return true }
-            if case .monk(true, _) = $0.change { return true }
+            if case .monk(true, _, _, _) = $0.change { return true }
             return false
         }
     }
@@ -151,8 +182,12 @@ import MonkShiftCore
         var session: Bool?
         for pending in pendingChanges {
             switch pending.change {
-            case let .setting(feature, enabled, _): values[feature] = enabled
-            case let .monk(enabled, _): session = enabled
+            case let .setting(feature, enabled, _):
+                values[feature] = enabled
+                if enabled, let alternative = feature.alternativeFocusMode { values[alternative] = false }
+            case let .monk(enabled, _, mode, _):
+                session = enabled
+                if enabled { values[mode] = true; if let alternative = mode.alternativeFocusMode { values[alternative] = false } }
             case .restoreAll: session = false
             }
         }
@@ -223,10 +258,16 @@ import MonkShiftCore
     private func apply(_ change: Change, using engine: SettingsEngine) async throws -> [OperationIssue] {
         switch change {
         case let .setting(feature, enabled, intensity):
-            do { try await engine.set(feature, enabled: enabled, intensity: intensity); return [] }
+            do {
+                if feature == .dimBackground, enabled, !accessibility.refresh() {
+                    throw MonkError("Allow Accessibility in System Settings to dim background windows.")
+                }
+                try await engine.set(feature, enabled: enabled, intensity: intensity)
+                return []
+            }
             catch { return [OperationIssue(feature, error)] }
-        case let .monk(enabled, intensity):
-            if enabled { return try await engine.enableMonk(intensity: intensity) }
+        case let .monk(enabled, intensity, mode, dimmingIntensity):
+            if enabled { return try await engine.enableMonk(intensity: intensity, focusMode: mode, dimmingIntensity: dimmingIntensity) }
             return try await engine.restoreMonk()
         case .restoreAll:
             var issues = try await engine.restoreMonk()
@@ -241,12 +282,16 @@ import MonkShiftCore
     }
 
     func set(_ feature: Feature, enabled: Bool) {
-        guard states[feature]?.available == true, states[feature]?.enabled != nil else { return }
-        enqueue(.setting(feature, enabled, intensity))
+        guard canChange, !quitRequested, states[feature]?.available == true, states[feature]?.enabled != nil else { return }
+        if enabled, feature.alternativeFocusMode != nil {
+            preferredFocusMode = feature
+            defaults.set(feature.rawValue, forKey: "preferredFocusMode")
+        }
+        enqueue(.setting(feature, enabled, feature == .dimBackground ? dimmingIntensity : intensity))
     }
 
     func toggleMonk() {
-        enqueue(.monk(!displayedHasSession, intensity))
+        enqueue(.monk(!displayedHasSession, intensity, preferredFocusMode, dimmingIntensity))
     }
 
     /// Return only after this command's mutation, persistence and read-back finish.
@@ -267,7 +312,7 @@ import MonkShiftCore
         case .disable: enabled = false
         }
         try await withCheckedThrowingContinuation { continuation in
-            enqueue(.monk(enabled, intensity)) { continuation.resume(with: $0) }
+            enqueue(.monk(enabled, intensity, preferredFocusMode, dimmingIntensity)) { continuation.resume(with: $0) }
         }
     }
 
@@ -276,6 +321,16 @@ import MonkShiftCore
         defaults.set(intensity, forKey: "intensity")
         if displayedEnabled(.grayscale) == true { set(.grayscale, enabled: true) }
     }
+
+    func commitDimmingIntensity() {
+        dimmingIntensity = BackgroundDimmingService.clamp(dimmingIntensity)
+        dimmingRevision += 1
+        defaults.set(dimmingIntensity, forKey: "dimmingIntensity")
+        if displayedEnabled(.dimBackground) == true { set(.dimBackground, enabled: true) }
+    }
+
+    func requestStartupPermissions() { accessibility.requestAtStartup(); refresh() }
+    func shutdown() { backend.shutdown() }
 
     func restoreAll() {
         enqueue(.restoreAll)
@@ -286,12 +341,13 @@ import MonkShiftCore
 
 #if MONKSHIFT_PREVIEW
     enum PreviewState: String, CaseIterable {
-        case off, allEnabled, monkSession, partiallyEnabled, unknown, unavailable, failed, applying, refreshing
+        case off, allEnabled, monkSession, dimming, dimmingDenied, partiallyEnabled, unknown, unavailable, failed, applying, refreshing
     }
 
     static func preview(directory: URL, state: PreviewState = .off) -> AppModel {
         let model = AppModel(directory: directory, shortcuts: ShortcutManager(installHandler: false))
         model.permissions.grantForPreview()
+        model.accessibility.grantForPreview()
         for feature in Feature.allCases {
             model.states[feature] = FeatureState(enabled: false)
         }
@@ -300,8 +356,18 @@ import MonkShiftCore
         model.states[.blackWallpaper]?.detail = "Connected displays in the current desktop Space."
         switch state {
         case .off: break
+        case .dimming, .dimmingDenied:
+            model.preferredFocusMode = .dimBackground
+            model.dimmingIntensity = 0.65
+            model.states[.dimBackground]?.enabled = state == .dimming
+            if state == .dimmingDenied {
+                model.accessibility.denyForPreview()
+                model.states[.dimBackground] = FeatureState(enabled: false,
+                    detail: "Allow Accessibility to dim background windows. Other controls remain available.", available: false)
+            }
         case .allEnabled, .monkSession, .unavailable, .failed:
             for feature in Feature.allCases { model.states[feature]?.enabled = true }
+            model.states[.dimBackground]?.enabled = false
             // An all-enabled state does not require a saved Monk Mode session.
             if state == .monkSession { model.hasSession = true }
             if state == .unavailable {

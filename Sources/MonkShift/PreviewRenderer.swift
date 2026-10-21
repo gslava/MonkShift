@@ -17,6 +17,11 @@ import SwiftUI
                 let name = state == .off ? "controls-\(theme)" : "controls-\(state.rawValue)-\(theme)"
                 try render(ControlsView(model: model).environment(\.colorScheme, scheme),
                     name: name, output: output, dark: dark)
+                if state == .dimming || state == .dimmingDenied {
+                    try render(DimmingControlsView(model: model).padding(24).environment(\.colorScheme, scheme),
+                        name: "focus-\(state.rawValue)-\(theme)", output: output, dark: dark,
+                        size: NSSize(width: 560, height: state == .dimming ? 300 : 420))
+                }
                 if state == .unavailable {
                     try render(ControlsView(model: model).environment(\.colorScheme, scheme),
                         name: "controls-minimum-\(theme)", output: output, dark: dark, size: NSSize(width: 540, height: 620))
@@ -38,6 +43,12 @@ import SwiftUI
                 try render(IntensityMenuPreview(intensity: intensity, enabled: enabled, filterEnabled: filterEnabled)
                     .environment(\.colorScheme, scheme), name: "intensity-menu-\(name)-\(theme)",
                     output: output, dark: dark, size: NSSize(width: 280, height: 88))
+            }
+            for (name, intensity, enabled) in [("active", 0.65, true), ("off", 0.5, false), ("maximum", 0.9, true)] {
+                try render(IntensityMenuPreview(intensity: intensity, enabled: enabled, filterEnabled: enabled,
+                    label: "Background dimming", maximum: 0.9).environment(\.colorScheme, scheme),
+                    name: "dimming-menu-\(name)-\(theme)", output: output, dark: dark,
+                    size: NSSize(width: 280, height: 88))
             }
         }
         print("Rendered fixture previews; no permission requests, shortcuts, or system setting writes.")
@@ -67,9 +78,12 @@ private struct IntensityMenuPreview: NSViewRepresentable {
     let intensity: Double
     let enabled: Bool
     let filterEnabled: Bool
+    var label = "Grayscale intensity"
+    var maximum = 1.0
 
     func makeNSView(context: Context) -> GrayscaleIntensityMenuView {
         GrayscaleIntensityMenuView(intensity: intensity, enabled: enabled, filterEnabled: filterEnabled,
+            label: label, maximum: maximum, disabledHint: maximum == 1 ? "Enable grayscale to adjust intensity." : "Enable background dimming to adjust.",
             onEditingChanged: { _ in }, onCommit: { _ in })
     }
 

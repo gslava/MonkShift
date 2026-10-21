@@ -31,6 +31,14 @@ import Foundation
         let suite = SettingsEngineTests()
         let summary = FeatureSummaryTests()
         let tests: [(String, () async throws -> Void)] = [
+            ("Focus switches persist both baselines before mutations", suite.testFocusModesSaveBothBaselinesBeforeSwitching),
+            ("Focus snapshot and disable failures prevent the other mode", suite.testFocusSnapshotOrDisableFailurePreventsOtherModeEnabling),
+            ("Monk Mode applies only the selected focus mode and its intensity", suite.testMonkUsesSelectedModeAndIndependentIntensity),
+            ("Unselected dimming permission does not block Monk Mode", suite.testUnselectedDimmingPermissionDoesNotBlockMonkMode),
+            ("Unavailable selected focus mode leaves the existing mode alone", suite.testSelectedUnavailableModeDoesNotDisableExistingMode),
+            ("Legacy journals restore without touching background dimming", suite.testLegacyJournalWithoutDimmingRestoresAfterRestart),
+            ("Focus restoration failures survive a file-store restart", suite.testFocusRestoreFailureSurvivesFileStoreRestart),
+            ("Status counts only the selected focus mode", summary.testSummaryIncludesOnlyTheSelectedFocusMode),
             ("Snapshots saved before mutation", suite.testAllSnapshotsPersistBeforeFirstMutation),
             ("Disk failure blocks mutation", suite.testDiskFailurePreventsEveryMutation),
             ("Repeated enable keeps original", suite.testRepeatedEnablePreservesOriginalSnapshot),

@@ -3,17 +3,42 @@ import MonkShiftCore
 
 @MainActor protocol ObservedSettingsBackend: SettingsBackend {
     func intensity() async throws -> Double
+    func dimmingIntensity() -> Double
+    func shutdown()
+}
+
+extension ObservedSettingsBackend {
+    func shutdown() {}
+    func dimmingIntensity() -> Double { 0.5 }
 }
 
 @MainActor final class MacSettingsBackend: ObservedSettingsBackend {
     private let wallpaper: WallpaperService
     private let preferences = PreferencesWorker()
     private let events = SystemEventsClient()
+    private let dimming: BackgroundDimmingService
 
-    init(directory: URL) { wallpaper = WallpaperService(directory: directory) }
+    init(directory: URL, accessibility: AccessibilityPermissionManager, defaults: UserDefaults = .standard) {
+        wallpaper = WallpaperService(directory: directory)
+        let preferences = self.preferences
+        dimming = BackgroundDimmingService(
+            state: .init(enabled: defaults.bool(forKey: "backgroundDimmingEnabled"),
+                intensity: defaults.object(forKey: "backgroundDimmingCurrentIntensity") == nil ? 0.5 : defaults.double(forKey: "backgroundDimmingCurrentIntensity")),
+            tracker: FocusedWindowTracker(), renderer: DimmingOverlayRenderer(),
+            trusted: { accessibility.refresh() },
+            oneWindowEnabled: { try await preferences.read(.oneWindowAtATime).enabled == true },
+            save: { state in
+                defaults.set(state.enabled, forKey: "backgroundDimmingEnabled")
+                defaults.set(state.intensity, forKey: "backgroundDimmingCurrentIntensity")
+            })
+    }
+
+    func shutdown() { dimming.shutdown() }
+    func dimmingIntensity() -> Double { dimming.state.intensity }
 
     func read(_ feature: Feature) async throws -> FeatureState {
         switch feature {
+        case .dimBackground: return await dimming.read()
         case .hideDock: return FeatureState(enabled: try await events.read(.hideDock))
         case .hideMenuBar: return FeatureState(enabled: try await events.read(.hideMenuBar))
         case .blackWallpaper:
@@ -26,6 +51,7 @@ import MonkShiftCore
 
     func snapshot(_ feature: Feature) async throws -> Data {
         switch feature {
+        case .dimBackground: return try JSONEncoder().encode(dimming.state)
         case .hideDock, .hideMenuBar:
             guard let enabled = try await read(feature).enabled else { throw MonkError("Could not read \(feature.title).") }
             return try JSONEncoder().encode(enabled)
@@ -36,6 +62,7 @@ import MonkShiftCore
 
     func apply(_ feature: Feature, intensity: Double) async throws {
         switch feature {
+        case .dimBackground: try await dimming.set(enabled: true, intensity: intensity)
         case .hideDock: try await events.write(.hideDock, enabled: true)
         case .hideMenuBar: try await events.write(.hideMenuBar, enabled: true)
         case .blackWallpaper: try wallpaper.apply()
@@ -48,6 +75,7 @@ import MonkShiftCore
 
     func disable(_ feature: Feature) async throws {
         switch feature {
+        case .dimBackground: try await dimming.set(enabled: false)
         case .hideDock: try await events.write(.hideDock, enabled: false)
         case .hideMenuBar: try await events.write(.hideMenuBar, enabled: false)
         case .blackWallpaper: throw MonkError("There is no saved wallpaper to restore. Choose a wallpaper in System Settings.")
@@ -58,12 +86,18 @@ import MonkShiftCore
 
     func restore(_ feature: Feature, from data: Data) async throws {
         switch feature {
+        case .dimBackground:
+            try await dimming.restore(JSONDecoder().decode(BackgroundDimmingService.State.self, from: data))
         case .hideDock, .hideMenuBar:
             let enabled = try JSONDecoder().decode(Bool.self, from: data)
             try await events.write(feature == .hideDock ? .hideDock : .hideMenuBar, enabled: enabled)
             guard try await read(feature).enabled == enabled else { throw MonkError("macOS did not restore \(feature.title).") }
         case .blackWallpaper: try wallpaper.restore(data)
-        default: try await preferences.restore(feature, from: data)
+        default:
+            try await preferences.restore(feature, from: data)
+            if feature == .oneWindowAtATime, try await preferences.read(feature).enabled == true {
+                try await dimming.set(enabled: false)
+            }
         }
     }
 

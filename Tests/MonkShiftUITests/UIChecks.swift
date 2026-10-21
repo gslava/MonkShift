@@ -17,9 +17,16 @@ private func require(_ condition: Bool, _ message: String) throws {
     func startSystemEvents() async throws { throw UIFailure(description: "Unexpected service launch") }
 }
 
+@MainActor private final class FakeAccessibility: AccessibilityPermissionClient {
+    var allowed = true
+    var prompts = 0
+    func isTrusted(prompt: Bool) -> Bool { if prompt { prompts += 1 }; return allowed }
+}
+
 @MainActor private final class FakeSettings: ObservedSettingsBackend {
     var values = Dictionary(uniqueKeysWithValues: Feature.allCases.map { ($0, false) })
     var amount = 0.5
+    var dimmingAmount = 0.5
     var changes: [String] = []
     var intensities: [Double] = []
     var failFeature: Feature?
@@ -49,6 +56,7 @@ private func require(_ condition: Bool, _ message: String) throws {
         }
         return amount
     }
+    func dimmingIntensity() -> Double { dimmingAmount }
     func snapshot(_ feature: Feature) async throws -> Data { try JSONEncoder().encode(values[feature]!) }
     func apply(_ feature: Feature, intensity: Double) async throws {
         let journal = try FileRestoreStore(url: directory.appendingPathComponent("restore.json")).load()
@@ -62,6 +70,7 @@ private func require(_ condition: Bool, _ message: String) throws {
         if failFeature == feature { throw MonkError("Fixture write failed") }
         values[feature] = true
         if feature == .grayscale { amount = intensity; intensities.append(intensity) }
+        if feature == .dimBackground { dimmingAmount = intensity; intensities.append(intensity) }
     }
     func disable(_ feature: Feature) async throws { values[feature] = false; changes.append("disable:\(feature.rawValue)") }
     func restore(_ feature: Feature, from data: Data) async throws {
@@ -80,6 +89,7 @@ private func require(_ condition: Bool, _ message: String) throws {
 @MainActor private final class Fixture {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MonkShiftUI-\(UUID().uuidString)")
     let permission = FakePermission()
+    let accessibility = FakeAccessibility()
     let backend: FakeSettings
     let model: AppModel
     private let defaults: UserDefaults
@@ -90,12 +100,18 @@ private func require(_ condition: Bool, _ message: String) throws {
         defaults = UserDefaults(suiteName: suite)!
         model = AppModel(directory: directory, backend: backend,
             permissions: PermissionManager(client: permission), shortcuts: ShortcutManager(installHandler: false),
+            accessibility: AccessibilityPermissionManager(client: accessibility),
             defaults: defaults)
     }
     func start() async throws {
         model.refresh()
         try await until { !self.model.refreshing }
         try require(model.canChange, "Fixture did not become available")
+    }
+    func restartedModel() -> AppModel {
+        AppModel(directory: directory, backend: backend, permissions: PermissionManager(client: permission),
+            shortcuts: ShortcutManager(installHandler: false), accessibility: AccessibilityPermissionManager(client: accessibility),
+            defaults: defaults)
     }
     func close() {
         backend.releaseRead()
@@ -120,6 +136,22 @@ private func require(_ condition: Bool, _ message: String) throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
         let checks: [(String, @MainActor () async throws -> Void)] = [
+            ("Focus handoff retains the layer until its new anchor is ready", DimmingChecks.testFocusHandoffKeepsTheLayerVisible),
+            ("Focus handoff removes unknown focus after its bounded deadline", DimmingChecks.testFocusHandoffDeadlineRemovesUnknownFocus),
+            ("Space changes and permission loss bypass focus handoff delay", DimmingChecks.testUnsafeFocusChangesClearImmediately),
+            ("Dimming validation waits for WindowServer publication", DimmingChecks.testDeferredWindowServerPublication),
+            ("Dimming validation bounds genuine ordering failures", DimmingChecks.testOrderingFailuresAreBounded),
+            ("Cancelled ordering validation ignores stale window state", DimmingChecks.testOrderingCancellationDoesNotReadStaleWindows),
+            ("Background dimming lifecycle caps intensity and stops on exit", DimmingChecks.testLifecycleAndIntensity),
+            ("Background dimming suspends on permission loss and grouping conflict", DimmingChecks.testPermissionAndConflict),
+            ("Background dimming hides on missing focus and ordering errors", DimmingChecks.testMissingFocusAndOrderingFailure),
+            ("Background dimming restores state and rejects invalid intensity", DimmingChecks.testStateRestorationAndInvalidIntensity),
+            ("Focused metadata matching rejects ambiguous and foreign windows", DimmingChecks.testMetadataMatching),
+            ("Focus selection survives restart and Monk Mode uses that choice", testFocusChoicePersistence),
+            ("Rapid focus switching remains exclusive and restores both baselines", testRapidFocusSwitching),
+            ("Dimming menu slider is independent and limited to 90 percent", testDimmingMenu),
+            ("Startup asks for Accessibility once without blocking other features", testAccessibilityStartup),
+            ("Revoked Accessibility blocks queued dimming without disabling the other mode", testQueuedAccessibilityRevocation),
             ("Refresh keeps controls stable and queues new input", testRefreshQueuesInput),
             ("Rapid checkbox changes execute in order without bouncing", testRapidToggles),
             ("Failed change rolls back and does not block the next setting", testFailureRecovery),
@@ -154,6 +186,109 @@ private func require(_ condition: Bool, _ message: String) throws {
         }
         print("\(checks.count) UI checks, \(failures) failures. Fake settings/permissions only; no real shortcuts or OS setting changes.")
         if failures > 0 { exit(1) }
+    }
+
+    @MainActor private static func testFocusChoicePersistence() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.model.dimmingIntensity = 0.75
+        f.model.commitDimmingIntensity()
+        f.model.set(.dimBackground, enabled: true)
+        try await until { !f.model.busy }
+        f.model.set(.dimBackground, enabled: false)
+        try await until { !f.model.busy }
+        try require(f.model.preferredFocusMode == .dimBackground, "Turning off a mode forgot the selected choice")
+        let restarted = f.restartedModel()
+        defer { restarted.shortcuts.shutdown(); restarted.shutdown() }
+        restarted.refresh()
+        try await until { !restarted.refreshing }
+        try require(restarted.preferredFocusMode == .dimBackground && restarted.dimmingIntensity == 0.75,
+            "Restart lost the mode choice or its independent intensity")
+        try await restarted.performMonkMode(.enable)
+        try require(f.backend.values[.dimBackground] == true && f.backend.values[.oneWindowAtATime] == false &&
+            f.backend.dimmingAmount == 0.75 && f.backend.amount == 0.5,
+            "Monk Mode ignored the selected mode or mixed up the two intensities")
+        try await restarted.performMonkMode(.disable)
+        try require(f.backend.values[.dimBackground] == false && f.backend.values[.oneWindowAtATime] == false,
+            "Monk Mode did not restore the pre-session focus states")
+    }
+
+    @MainActor private static func testRapidFocusSwitching() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.values[.oneWindowAtATime] = true
+        try await f.start()
+        f.backend.holdApply = true
+        f.model.set(.dimBackground, enabled: true)
+        try await until { f.backend.blockedApply != nil }
+        f.model.set(.oneWindowAtATime, enabled: true)
+        f.model.set(.dimBackground, enabled: true)
+        try require(f.model.displayedEnabled(.dimBackground) == true && f.model.displayedEnabled(.oneWindowAtATime) == false,
+            "Queued focus controls showed two enabled modes")
+        f.backend.releaseApply()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.dimBackground] == true && f.backend.values[.oneWindowAtATime] == false,
+            "Rapid focus changes ended with the wrong mode")
+        f.model.restoreAll()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.dimBackground] == false && f.backend.values[.oneWindowAtATime] == true,
+            "Restore All lost the originally enabled Stage Manager mode")
+    }
+
+    @MainActor private static func testDimmingMenu() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        let menu = SettingsMenuController(model: f.model, showWindow: {}, quit: {})
+        f.model.onRefresh = { [weak menu] in menu?.update() }
+        guard let row = menu.menu.items.first(where: { $0.representedObject as? String == Feature.dimBackground.rawValue }),
+              let action = row.action else { throw UIFailure(description: "Dimming menu toggle missing") }
+        try require(NSApp.sendAction(action, to: row.target, from: row), "Dimming menu action failed")
+        try await until { !f.model.busy }
+        guard let view = menu.menu.items.compactMap(\.view).first(where: {
+            $0.subviews.compactMap { $0 as? NSSlider }.first?.maxValue == 90
+        }), let slider = view.subviews.compactMap({ $0 as? NSSlider }).first else {
+            throw UIFailure(description: "Separate 0–90% dimming menu slider missing")
+        }
+        let identity = ObjectIdentifier(view)
+        slider.doubleValue = 90
+        try require(slider.isEnabled && slider.sendAction(slider.action, to: slider.target), "Dimming slider did not commit")
+        try await until { !f.model.busy }
+        try require(f.backend.dimmingAmount == 0.9 && f.model.intensity == 0.5 && f.backend.amount == 0.5,
+            "Dimming menu slider changed grayscale intensity")
+        menu.update()
+        try require(menu.menu.items.compactMap(\.view).contains { ObjectIdentifier($0) == identity }, "Dimming slider was recreated")
+    }
+
+    @MainActor private static func testAccessibilityStartup() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.accessibility.allowed = false
+        f.model.requestStartupPermissions()
+        f.model.requestStartupPermissions()
+        try await until { !f.model.refreshing }
+        try require(f.accessibility.prompts == 1 && f.model.canChange && f.model.states[.dimBackground]?.available == false,
+            "Startup repeated Accessibility prompts or blocked unrelated controls")
+        f.model.set(.oneWindowAtATime, enabled: true)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.oneWindowAtATime] == true, "Denied Accessibility blocked Stage Manager mode")
+        f.accessibility.allowed = true
+        f.model.refresh()
+        try await until { !f.model.refreshing }
+        try require(f.model.canAdjustDimmingIntensity, "Accessibility grant did not unlock dimming controls")
+    }
+
+    @MainActor private static func testQueuedAccessibilityRevocation() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.values[.oneWindowAtATime] = true
+        try await f.start()
+        f.backend.holdRead = true
+        f.model.refresh()
+        try await until { f.backend.blockedRead != nil }
+        f.model.set(.dimBackground, enabled: true)
+        f.accessibility.allowed = false
+        f.backend.releaseRead()
+        try await until { !f.model.refreshing && !f.model.busy }
+        try require(f.backend.values[.oneWindowAtATime] == true && f.backend.values[.dimBackground] == false &&
+            f.model.issue(for: .dimBackground)?.contains("Accessibility") == true,
+            "Revoked Accessibility disabled the existing mode or enabled a queued dimming effect")
     }
 
     @MainActor private static func testRefreshQueuesInput() async throws {
@@ -288,7 +423,7 @@ private func require(_ condition: Bool, _ message: String) throws {
         f.model.onRefresh = { [weak controller] in controller?.update() }
         let original = controller.menu.items
         let row = original.first { $0.representedObject as? String == Feature.hideDock.rawValue }!
-        let control = original.first { $0.view is GrayscaleIntensityMenuView }!
+        let control = original.first { $0.title.hasPrefix("Grayscale intensity") }!
         let view = control.view!
         let slider = view.subviews.compactMap { $0 as? NSSlider }.first!
         let title = original[0].title
@@ -425,7 +560,8 @@ private func require(_ condition: Bool, _ message: String) throws {
         try await f.start()
         MonkModeIntentHandler.shared.model = f.model
         _ = try await EnableMonkModeIntent().perform()
-        try require(f.model.hasSession && f.backend.values.values.allSatisfy { $0 }, "Enable intent did not apply Monk Mode")
+        try require(f.model.hasSession && Feature.allCases.filter { $0 != .dimBackground }.allSatisfy { f.backend.values[$0] == true } &&
+            f.backend.values[.dimBackground] == false, "Enable intent did not apply the selected focus mode")
         _ = try await ToggleMonkModeIntent().perform()
         try require(!f.model.hasSession && f.backend.values.values.allSatisfy { !$0 }, "Toggle intent did not restore the session")
         _ = try await ToggleMonkModeIntent().perform()

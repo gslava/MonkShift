@@ -19,10 +19,6 @@ struct SettingsStatusView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.statusTitle).font(.headline)
                 Text(model.statusDetail).font(.callout).foregroundStyle(.secondary)
-                if model.statusNeedsAttention {
-                    Label("Settings need attention. See the messages below.", systemImage: "exclamationmark.triangle")
-                        .font(.callout).foregroundStyle(.orange)
-                }
             }
             Spacer(minLength: 0)
         }

@@ -1,6 +1,10 @@
 import SwiftUI
 import MonkShiftCore
 
+enum ControlsLayout {
+    static let size = CGSize(width: 716, height: 568)
+}
+
 struct RootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var permissions: PermissionManager
@@ -11,7 +15,8 @@ struct RootView: View {
             if permissions.granted { ControlsView(model: model) }
             else { PermissionView(permissions: permissions) }
         }
-        .frame(minWidth: 540, idealWidth: 560, maxWidth: .infinity, minHeight: 620, maxHeight: .infinity)
+        .frame(minWidth: ControlsLayout.size.width, idealWidth: ControlsLayout.size.width, maxWidth: .infinity,
+            minHeight: ControlsLayout.size.height, idealHeight: ControlsLayout.size.height, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { model.refresh() }
     }
@@ -60,70 +65,99 @@ struct PermissionView: View {
 struct ControlsView: View {
     @ObservedObject var model: AppModel
     @State private var showShortcuts = false
+    @State private var showIssues = false
+
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("MonkShift").font(.title.weight(.semibold))
-                        Text("Focus controls for your Mac.").foregroundStyle(.secondary)
-                    }
+                    Text("MonkShift").font(.title2.weight(.semibold))
                     Spacer()
                     Button("Refresh", systemImage: "arrow.clockwise") { model.refresh() }
                         .labelStyle(.iconOnly).help("Read current macOS settings")
                 }
-                SettingsStatusView(model: model)
-                Button { model.toggleMonk() } label: {
-                    HStack {
-                        Image(systemName: model.displayedHasSession ? "arrow.uturn.backward" : "circle.lefthalf.filled")
-                        Text(model.displayedHasSession ? "Disable Monk Mode · Restore Previous Settings" : "Monk Mode · Enable Selected Settings")
-                        Spacer()
-                    }
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent).controlSize(.large).disabled(!model.canChange)
-                Text(model.hasSession ? "Previous settings are saved. Background dimming stops when MonkShift quits." : "Previous settings are saved before changes are applied.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            .padding(24)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    if let error = model.generalError {
-                        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).textSelection(.enabled)
-                    }
-                    group("Dock & Menu Bar", features: [.instantDock, .hideDock, .hideMenuBar])
-                    group("Stage Manager", features: [.stageManager, .hideRecentApps])
-                    DimmingControlsView(model: model)
-                    group("Display", features: [.hideDesktopItems, .reduceMotion, .blackWallpaper, .grayscale])
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Grayscale intensity")
-                            Spacer()
-                            Text("\(Int((model.intensity * 100).rounded()))%")
-                                .monospacedDigit().foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 20) {
+                    SettingsStatusView(model: model)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Button { model.toggleMonk() } label: {
+                            Text(model.displayedHasSession ? "Disable Monk Mode" : "Enable Monk Mode")
+                                .frame(minWidth: 160)
                         }
-                        Slider(value: $model.intensity, in: 0...1) { editing in
-                            model.isEditingIntensity = editing
-                            if !editing { model.commitIntensity() }
-                        }
-                        .accessibilityLabel("Grayscale intensity")
-                        .accessibilityValue("\(Int((model.intensity * 100).rounded())) percent")
-                        .disabled(!model.canAdjustIntensity)
-                        Text("Applied when you release the slider. 50% by default.")
+                        .buttonStyle(MonkModeButtonStyle())
+                        .disabled(!model.canChange)
+                        .help(model.displayedHasSession ? "Restore the settings saved before Monk Mode." : "Save previous settings, then enable Monk Mode.")
+                        Text(model.hasSession ? "Disable to restore previous settings." : "Previous settings are saved before changes.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
-                .padding(24)
             }
+            .padding(16)
+            VStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    SettingsCard("Dock & Menu Bar") {
+                        FeatureRow(feature: .instantDock, model: model)
+                        FeatureRow(feature: .hideDock, model: model)
+                        FeatureRow(feature: .hideMenuBar, model: model)
+                    }
+                    DimmingControlsView(model: model)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    SettingsCard("Stage Manager") {
+                        FeatureRow(feature: .stageManager, model: model)
+                        FeatureRow(feature: .hideRecentApps, model: model)
+                        Text("Recent apps are hidden while Stage Manager is on.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    SettingsCard("Display") {
+                        FeatureRow(feature: .hideDesktopItems, model: model)
+                        FeatureRow(feature: .reduceMotion, model: model)
+                        FeatureRow(feature: .blackWallpaper, model: model)
+                        FeatureRow(feature: .grayscale, model: model)
+                        IntensityControl(title: "Grayscale intensity", value: $model.intensity, maximum: 1) { editing in
+                            model.isEditingIntensity = editing
+                            if !editing { model.commitIntensity() }
+                        }
+                        .disabled(!model.canAdjustIntensity)
+                        .help("0–100%. Applied when you release the slider. When grayscale is off, saves the amount for the next enable.")
+                    }
+                }
+            }
+            .padding(.horizontal, 16).padding(.bottom, 16)
+            .frame(maxHeight: .infinity, alignment: .top)
             Divider()
             HStack(spacing: 12) {
-                Spacer()
                 Button("Shortcuts…") { showShortcuts = true }.disabled(!model.canChange)
-                Button("Restore All Changes") { model.restoreAll() }
+                Spacer()
+                if model.statusNeedsAttention {
+                    Button("Review Issues…", systemImage: "exclamationmark.triangle") { showIssues = true }
+                        .foregroundStyle(.orange)
+                        .popover(isPresented: $showIssues) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Settings need attention").font(.headline)
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        if let error = model.generalError { Text(error) }
+                                        ForEach(model.issues) { issue in
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(issue.feature.title).fontWeight(.medium)
+                                                Text(issue.message)
+                                            }
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                                }
+                                .frame(maxHeight: 240)
+                            }
+                            .padding(16).frame(width: 360)
+                        }
+                }
+                Button("Restore All") { model.restoreAll() }
                     .disabled(!model.canChange || (!model.displayedHasSession && !model.hasIndividualChanges && model.requestedValues.isEmpty))
+                    .help("Restore the saved Monk Mode session and individual changes.")
             }
-            .padding(.horizontal, 24).padding(.vertical, 14)
+            .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .sheet(isPresented: $showShortcuts) {
             VStack(alignment: .leading, spacing: 20) {
@@ -137,12 +171,39 @@ struct ControlsView: View {
             .padding(24).frame(width: 500)
         }
     }
+}
 
-    private func group(_ title: String, features: [Feature]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline)
-            ForEach(features) { feature in FeatureRow(feature: feature, model: model) }
+private struct MonkModeButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .fontWeight(.medium)
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .foregroundStyle(.white)
+            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 6))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.5)
+    }
+}
+
+struct SettingsCard<Content: View>: View {
+    let title: String
+    private let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+            content
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
     }
 }
 
@@ -153,60 +214,103 @@ struct DimmingControlsView: View {
     init(model: AppModel) { self.model = model; accessibility = model.accessibility }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Window Focus").font(.headline)
+        SettingsCard("Window Focus") {
             FeatureRow(feature: .oneWindowAtATime, model: model)
             FeatureRow(feature: .dimBackground, model: model)
-            Text("Choose either mode. Monk Mode uses your last choice: \(model.preferredFocusMode.title).")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if !accessibility.granted {
-                HStack {
-                    Button("Allow Accessibility") { accessibility.request(); model.refresh() }
-                    Button("Open System Settings") { accessibility.openSettings() }
-                }
-                Text("Enable MonkShift in Privacy & Security → Accessibility, then press Refresh. Other controls remain available.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            HStack {
-                Text("Background dimming intensity")
-                Spacer()
-                Text("\(Int((model.dimmingIntensity * 100).rounded()))%")
-                    .monospacedDigit().foregroundStyle(.secondary)
-            }
-            Slider(value: $model.dimmingIntensity, in: 0...0.9) { editing in
+            IntensityControl(title: "Dimming", value: $model.dimmingIntensity, maximum: 0.9,
+                accessibilityTitle: "Background dimming intensity") { editing in
                 model.isEditingDimmingIntensity = editing
                 if !editing { model.commitDimmingIntensity() }
             }
-            .accessibilityLabel("Background dimming intensity")
-            .accessibilityValue("\(Int((model.dimmingIntensity * 100).rounded())) percent")
             .disabled(!model.canAdjustDimmingIntensity)
-            Text("0–90%. Applied when you release the slider. 50% by default.")
-                .font(.callout).foregroundStyle(.secondary)
+            .help("0–90%. Applied when you release the slider. Background dimming stops when MonkShift quits.")
+            HStack {
+                if !accessibility.granted {
+                    Button("Allow Accessibility…") { accessibility.request(); model.refresh() }
+                        .controlSize(.small)
+                    Button("Open Settings") { accessibility.openSettings() }
+                        .controlSize(.small).help("Open Privacy & Security → Accessibility, enable MonkShift, then Refresh.")
+                } else {
+                    Text("Choose one focus mode.").font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                ContextHelpButton(title: "Window Focus", detail: "Choose either mode. Monk Mode uses your last choice: \(model.preferredFocusMode.title). Turning both off keeps that choice for the next Monk Mode session. Background dimming stops when MonkShift quits.")
+            }
         }
+    }
+}
+
+struct IntensityControl: View {
+    let title: String
+    @Binding var value: Double
+    let maximum: Double
+    var accessibilityTitle: String? = nil
+    let onEditingChanged: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title).fixedSize()
+            Slider(value: $value, in: 0...maximum, onEditingChanged: onEditingChanged)
+                .labelsHidden()
+                .accessibilityLabel(accessibilityTitle ?? title)
+                .accessibilityValue("\(Int((value * 100).rounded())) percent")
+            Text("\(Int((value * 100).rounded()))%")
+                .monospacedDigit().foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
+        }
+        .frame(minHeight: 24)
     }
 }
 
 struct FeatureRow: View {
     let feature: Feature
     @ObservedObject var model: AppModel
+
     var body: some View {
         let state = model.states[feature]
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Toggle(feature.title, isOn: Binding(
-                    get: { model.displayedEnabled(feature) == true },
-                    set: { model.set(feature, enabled: $0) }
-                ))
-                .toggleStyle(.checkbox)
-                .disabled(!model.canChange || state?.available != true || state?.enabled == nil)
-                Spacer(minLength: 8)
-                Text(state?.available == false ? "Unavailable" : model.displayedEnabled(feature).map { $0 ? "On" : "Off" } ?? "Unknown")
+        let issue = model.issue(for: feature)
+        HStack(spacing: 6) {
+            Toggle(feature == .hideRecentApps ? "Hide recent apps" : feature.title, isOn: Binding(
+                get: { model.displayedEnabled(feature) == true },
+                set: { model.set(feature, enabled: $0) }
+            ))
+            .toggleStyle(.checkbox)
+            .disabled(!model.canChange || state?.available != true || state?.enabled == nil)
+            .accessibilityLabel(feature.title)
+            Spacer(minLength: 0)
+            if state?.available == false || model.displayedEnabled(feature) == nil {
+                Text(state?.available == false ? "Unavailable" : "Unknown")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            if let detail = model.issue(for: feature) ?? state?.detail {
-                Text(detail).font(.callout).foregroundStyle(model.issue(for: feature) == nil ? Color.secondary : Color.red)
-                    .padding(.leading, 20).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            if let detail = issue ?? state?.detail {
+                ContextHelpButton(title: feature.title, detail: detail,
+                    needsAttention: issue != nil || state?.available == false || state?.enabled == nil)
             }
+        }
+        .frame(minHeight: 24)
+    }
+}
+
+struct ContextHelpButton: View {
+    let title: String
+    let detail: String
+    var needsAttention = false
+    @State private var isPresented = false
+
+    var body: some View {
+        Button { isPresented.toggle() } label: {
+            Image(systemName: needsAttention ? "exclamationmark.circle" : "info.circle")
+                .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                .frame(width: 18, height: 20)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title) details")
+        .help(detail)
+        .popover(isPresented: $isPresented) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.headline)
+                Text(detail).font(.callout).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            .padding(16).frame(width: 320, alignment: .leading)
         }
     }
 }

@@ -11,8 +11,8 @@ dimming background windows with an independent intensity control up to 90%.
 Settings are also available individually in the app window and menu bar.
 
 <p>
-  <img src="docs/images/controls-light.png" width="280" alt="MonkShift controls in light appearance">
-  <img src="docs/images/controls-dark.png" width="280" alt="MonkShift controls in dark appearance">
+  <img src="docs/images/controls-light.png" width="348" alt="Compact two-column MonkShift controls in light appearance">
+  <img src="docs/images/controls-dark.png" width="348" alt="Compact two-column MonkShift controls in dark appearance">
 </p>
 
 Fixture previews of the real UI, rendered without changing system settings. They
@@ -123,7 +123,22 @@ releases the lock on exit or a crash; an old PID file alone cannot block startup
 
 Every setting has a checkbox in the window and in the native menu bar menu. Status is refreshed when opening the menu/window, returning to MonkShift, changing the desktop Space while the window is visible, waking the Mac, and after applying settings. Use **Refresh** for changes made elsewhere. No repeating background polling is used.
 
-The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of ten (the nine common settings plus the selected window-focus mode). The unselected focus mode is excluded from this count. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. The summary stays visible during background work. A small activity indicator appears in a fixed space in the window only if work lasts longer than half a second. Operation errors appear separately. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
+The window opens with a **716 × 568 pt content area**, also its minimum size.
+Two columns keep all eleven checkboxes and both intensity sliders visible without
+scrolling: **Dock & Menu Bar** and **Stage Manager** on the left, **Window Focus**
+and **Display** on the right. The header keeps the observed status, **Refresh**
+and **Enable Monk Mode** / **Disable Monk Mode** together. **Shortcuts…** and
+**Restore All** stay in the footer. Disabling Monk Mode restores the settings
+saved before that session.
+
+Checkboxes show enabled/disabled state directly. **Unknown** and **Unavailable**
+remain explicit labels. Click the information or warning button beside a setting
+for its full explanation; these buttons also support keyboard focus and tooltips.
+Permission actions appear inside **Window Focus** when Accessibility is missing.
+Operation and storage errors expose a **Review Issues…** button in the footer,
+with selectable details in a popover; long messages do not expand the controls.
+
+The top of the window and menu shows **All enabled**, **Partially enabled**, **Off**, or **Status unknown**, together with the number of confirmed enabled settings out of ten (the nine common settings plus the selected window-focus mode). The unselected focus mode is excluded from this count. This reflects observed settings, independently of the saved Monk Mode session. Unknown and unavailable settings are counted separately and never count as confirmed enabled. The summary stays visible during background work. A small activity indicator appears in a fixed space in the window only if work lasts longer than half a second. The menu bar uses a monochrome template icon of a monk in the lotus pose, adapting to light and dark menu bars.
 
 | Setting | Implementation and scope |
 | --- | --- |
@@ -325,7 +340,7 @@ The suite totals **111 checks**: 32 core, 8 Automation permission, 16 system and
 55 UI/intent checks. These checks do not establish live menu compatibility or
 CPU/RAM usage.
 
-`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. Controls cover off, all enabled with/without a saved session, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
+`bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. The controls use the same 716 × 568 pt content size as the app. They cover off, all enabled with/without a saved session, background dimming with/without Accessibility, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
 
 Manual acceptance checks on **both macOS 14 and macOS 15**:
 
@@ -342,7 +357,7 @@ Manual acceptance checks on **both macOS 14 and macOS 15**:
 - Test wallpaper restoration with multiple displays, a temporarily disconnected display, and separate desktop Spaces. Confirm documented scope.
 - Edit and use all four shortcuts from another app. Try duplicates and a shortcut registered by another app; confirm errors preserve the previous assignment.
 - With a full-Xcode build installed in `/Applications`, open Shortcuts and find all three MonkShift actions. Run Toggle with MonkShift quit, then again while it is running; confirm the saved baseline is restored. Repeat Enable twice, then Disable twice. Test a revoked Automation permission and a partial restore failure: Shortcuts must report an error and the restore records must remain retryable. Verify discovery and execution on macOS 14 and the current macOS; compiler/fixture checks do not prove system registration.
-- Inspect light/dark mode, keyboard navigation, VoiceOver labels, minimum window size and scrolling. Closing the window leaves menu bar control available.
+- Inspect light/dark mode, keyboard navigation and VoiceOver labels. At the minimum 716 × 568 pt content size, confirm all eleven checkboxes, both sliders and footer actions remain visible without scrolling, including unknown/unavailable, Accessibility-denied and failed-operation states. Open contextual explanations and Review Issues with the keyboard; verify full messages remain readable. Closing the window leaves menu bar control available.
 - Measure idle CPU/memory using the release build after closing the window.
 
 The build scripts do not launch MonkShift or change system settings. Real permission prompts, visual OS effects, macOS 14 behavior, global shortcut delivery, Apple Shortcuts discovery/cold launch and idle RAM remain manual verification gates until tested in an intentional app session. App Intents metadata extraction requires full Xcode and cannot be validated with Command Line Tools alone.

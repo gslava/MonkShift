@@ -18,13 +18,13 @@ import SwiftUI
                 try render(ControlsView(model: model).environment(\.colorScheme, scheme),
                     name: name, output: output, dark: dark)
                 if state == .dimming || state == .dimmingDenied {
-                    try render(DimmingControlsView(model: model).padding(24).environment(\.colorScheme, scheme),
+                    try render(DimmingControlsView(model: model).padding(16).environment(\.colorScheme, scheme),
                         name: "focus-\(state.rawValue)-\(theme)", output: output, dark: dark,
-                        size: NSSize(width: 560, height: state == .dimming ? 300 : 420))
+                        size: NSSize(width: 342, height: 220))
                 }
                 if state == .unavailable {
                     try render(ControlsView(model: model).environment(\.colorScheme, scheme),
-                        name: "controls-minimum-\(theme)", output: output, dark: dark, size: NSSize(width: 540, height: 620))
+                        name: "controls-minimum-\(theme)", output: output, dark: dark, size: ControlsLayout.size)
                 }
                 model.shortcuts.shutdown()
             }
@@ -55,7 +55,7 @@ import SwiftUI
     }
 
     @MainActor private static func render<V: View>(_ view: V, name: String, output: URL, dark: Bool,
-        size: NSSize = NSSize(width: 560, height: 800)) throws {
+        size: NSSize = ControlsLayout.size) throws {
         let hosting = NSHostingView(rootView: view.frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)

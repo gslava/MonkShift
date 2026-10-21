@@ -94,8 +94,8 @@ import MonkShiftCore
             let created = NSWindow(contentViewController: controller)
             created.title = "MonkShift"
             created.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            created.setContentSize(NSSize(width: 560, height: 800))
-            created.minSize = NSSize(width: 540, height: 620)
+            created.setContentSize(ControlsLayout.size)
+            created.contentMinSize = ControlsLayout.size
             created.isReleasedWhenClosed = false
             created.delegate = self
             created.center()

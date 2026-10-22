@@ -31,6 +31,16 @@ import Foundation
         let suite = SettingsEngineTests()
         let summary = FeatureSummaryTests()
         let tests: [(String, () async throws -> Void)] = [
+            ("One-window mode restores Stage Manager for each cycle", suite.testOneWindowRestoresStageManagerForEachCycle),
+            ("Switching to dimming restores Stage Manager first", suite.testDimmingSwitchRestoresStageManager),
+            ("Stage Manager prerequisite failures preserve the other mode", suite.testStageManagerPrerequisiteFailuresPreserveOtherMode),
+            ("Stage Manager restore failure survives restart and retries", suite.testStageManagerRestoreRetryAfterRestart),
+            ("Failed focus metadata writes remain retryable", suite.testStageManagerCycleClearFailureIsRetryable),
+            ("Monk restoration preserves the earlier individual focus cycle", suite.testMonkPreservesEarlierFocusCycle),
+            ("Focus changes within Monk restore the immediate Stage Manager state", suite.testOneWindowWithinMonkRestoresSessionStageState),
+            ("Monk Stage Manager failures do not switch focus modes", suite.testMonkStageManagerFailurePreservesOtherMode),
+            ("Existing journals decode without focus metadata", suite.testLegacyJournalDecodesWithoutFocusMetadata),
+            ("Failed session metadata cleanup survives restart", suite.testMonkFocusCleanupFailureRetainsSession),
             ("Focus switches persist both baselines before mutations", suite.testFocusModesSaveBothBaselinesBeforeSwitching),
             ("Focus snapshot and disable failures prevent the other mode", suite.testFocusSnapshotOrDisableFailurePreventsOtherModeEnabling),
             ("Monk Mode applies only the selected focus mode and its intensity", suite.testMonkUsesSelectedModeAndIndependentIntensity),

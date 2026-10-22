@@ -185,6 +185,7 @@ import MonkShiftCore
             case let .setting(feature, enabled, _):
                 values[feature] = enabled
                 if enabled, let alternative = feature.alternativeFocusMode { values[alternative] = false }
+                if enabled && feature == .oneWindowAtATime { values[.stageManager] = true }
             case let .monk(enabled, _, mode, _):
                 session = enabled
                 if enabled { values[mode] = true; if let alternative = mode.alternativeFocusMode { values[alternative] = false } }
@@ -352,7 +353,7 @@ import MonkShiftCore
             model.states[feature] = FeatureState(enabled: false)
         }
         model.states[.hideRecentApps]?.detail = "Takes effect while Stage Manager is on."
-        model.states[.oneWindowAtATime]?.detail = "Takes effect while Stage Manager is on."
+        model.states[.oneWindowAtATime]?.detail = "Automatically enables Stage Manager. Turning this mode off or choosing dimming restores its previous state."
         model.states[.blackWallpaper]?.detail = "Connected displays in the current desktop Space."
         switch state {
         case .off: break

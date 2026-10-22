@@ -162,6 +162,8 @@ private func require(_ condition: Bool, _ message: String) throws {
             ("Focused metadata matching rejects ambiguous and foreign windows", DimmingChecks.testMetadataMatching),
             ("Focus selection survives restart and Monk Mode uses that choice", testFocusChoicePersistence),
             ("Rapid focus switching remains exclusive and restores both baselines", testRapidFocusSwitching),
+            ("One-window menu control enables and restores Stage Manager", testOneWindowMenuStageLifecycle),
+            ("Failed automatic Stage Manager input rolls back displayed state", testOneWindowStageFailureReadback),
             ("Dimming menu slider is independent and limited to 90 percent", testDimmingMenu),
             ("Startup asks for Accessibility once without blocking other features", testAccessibilityStartup),
             ("Revoked Accessibility blocks queued dimming without disabling the other mode", testQueuedAccessibilityRevocation),
@@ -245,6 +247,56 @@ private func require(_ condition: Bool, _ message: String) throws {
         try await until { !f.model.busy }
         try require(f.backend.values[.dimBackground] == false && f.backend.values[.oneWindowAtATime] == true,
             "Restore All lost the originally enabled Stage Manager mode")
+    }
+
+    @MainActor private static func testOneWindowMenuStageLifecycle() async throws {
+        for initiallyEnabled in [false, true] {
+            let f = Fixture(); defer { f.close() }
+            f.backend.values[.stageManager] = initiallyEnabled
+            try await f.start()
+            let controller = SettingsMenuController(model: f.model, showWindow: {}, quit: {})
+            f.model.onRefresh = { [weak controller] in controller?.update() }
+            guard let row = controller.menu.items.first(where: { $0.representedObject as? String == Feature.oneWindowAtATime.rawValue }),
+                  let action = row.action else { throw UIFailure(description: "One-window menu control is missing") }
+            f.backend.holdApply = true
+            try require(NSApp.sendAction(action, to: row.target, from: row), "One-window menu action was not handled")
+            try await until { f.backend.blockedApply != nil }
+            try require(f.model.displayedEnabled(.stageManager) == true && row.state == .on,
+                "Queued automatic Stage Manager input was not displayed")
+            f.backend.releaseApply()
+            try await until { !f.model.busy }
+            try require(f.backend.values[.stageManager] == true && f.backend.values[.oneWindowAtATime] == true,
+                "One-window menu input did not enable Stage Manager")
+            try require(NSApp.sendAction(action, to: row.target, from: row), "One-window menu disable was not handled")
+            try await until { !f.model.busy }
+            try require(f.backend.values[.stageManager] == initiallyEnabled && row.state == .off,
+                "One-window disable did not restore the earlier Stage Manager state")
+            f.model.set(.oneWindowAtATime, enabled: true)
+            try await until { !f.model.busy }
+            f.model.set(.dimBackground, enabled: true)
+            try await until { !f.model.busy }
+            try require(f.backend.values[.stageManager] == initiallyEnabled && f.backend.values[.dimBackground] == true,
+                "Switching to dimming did not restore Stage Manager")
+        }
+    }
+
+    @MainActor private static func testOneWindowStageFailureReadback() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.values[.dimBackground] = true
+        f.backend.failFeature = .stageManager
+        try await f.start()
+        f.model.set(.oneWindowAtATime, enabled: true)
+        try require(f.model.displayedEnabled(.stageManager) == true, "Automatic Stage Manager input was not queued")
+        try await until { !f.model.busy }
+        try require(f.model.displayedEnabled(.stageManager) == false && f.model.displayedEnabled(.oneWindowAtATime) == false &&
+            f.backend.values[.dimBackground] == true && f.model.requestedValues.isEmpty && f.model.issue(for: .oneWindowAtATime) != nil,
+            "A failed prerequisite left false enabled states or disabled the earlier focus mode")
+        f.backend.failFeature = nil
+        f.model.set(.oneWindowAtATime, enabled: true)
+        try await until { !f.model.busy }
+        f.model.set(.oneWindowAtATime, enabled: false)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.stageManager] == false, "Retry lost the original Stage Manager baseline")
     }
 
     @MainActor private static func testDimmingMenu() async throws {

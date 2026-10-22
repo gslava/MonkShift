@@ -25,7 +25,7 @@ struct RootView: View {
 struct PermissionView: View {
     @ObservedObject var permissions: PermissionManager
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 20) {
             Image(systemName: "circle.lefthalf.filled").font(.system(size: 40)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 8) {
                 Text("Welcome to MonkShift").font(.largeTitle.weight(.semibold))
@@ -44,6 +44,7 @@ struct PermissionView: View {
                 Text("No accounts, analytics, network requests, screen recording, or keyboard monitoring. Your saved settings stay on this Mac.")
                     .foregroundStyle(.secondary)
             }
+            .fixedSize(horizontal: false, vertical: true)
             if let detail = permissions.detail {
                 Text(detail).font(.callout).foregroundStyle(.red).textSelection(.enabled)
             }
@@ -56,6 +57,8 @@ struct PermissionView: View {
                 .disabled(permissions.checking)
             Text("Controls unlock after permission is granted. You can quit at any time.")
                 .font(.callout).foregroundStyle(.secondary)
+            Text(AppVersion.label).font(.callout).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity).help(AppVersion.detail)
             Spacer(minLength: 0)
         }
         .padding(32)
@@ -158,6 +161,9 @@ struct ControlsView: View {
                     .help("Restore the saved Monk Mode session and individual changes.")
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
+            .overlay {
+                Text(AppVersion.label).font(.callout).foregroundStyle(.secondary).help(AppVersion.detail)
+            }
         }
         .sheet(isPresented: $showShortcuts) {
             VStack(alignment: .leading, spacing: 20) {

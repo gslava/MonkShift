@@ -6,8 +6,10 @@ import Foundation
     private let backend: SettingsBackend
     private let store: RestoreStore
     private var operationInProgress = false
-    public var hasMonkSession: Bool { !journal.monk.isEmpty }
-    public var hasIndividualChanges: Bool { !journal.individual.isEmpty }
+    public var hasMonkSession: Bool { !journal.monk.isEmpty || journal.monkFocusBaseline != nil }
+    public var hasIndividualChanges: Bool {
+        !journal.individual.isEmpty || (!hasMonkSession && journal.stageManagerBeforeOneWindow != nil)
+    }
 
     public init(backend: SettingsBackend, store: RestoreStore) throws {
         self.backend = backend
@@ -29,7 +31,17 @@ import Foundation
         try beginOperation()
         defer { operationInProgress = false }
         var next = journal
-        let affected = enabled ? [feature] + (feature.alternativeFocusMode.map { [$0] } ?? []) : [feature]
+        var affected = enabled ? [feature] + (feature.alternativeFocusMode.map { [$0] } ?? []) : [feature]
+        if hasMonkSession && next.monkFocusBaseline == nil {
+            next.monkFocusBaseline = .init(stageManagerBeforeOneWindow: journal.stageManagerBeforeOneWindow)
+        }
+        if feature == .oneWindowAtATime && enabled {
+            _ = try await stageManagerState()
+            affected.append(.stageManager)
+            if next.stageManagerBeforeOneWindow == nil {
+                next.stageManagerBeforeOneWindow = try await backend.snapshot(.stageManager)
+            }
+        }
         for affectedFeature in affected where next.individual[affectedFeature.rawValue] == nil && next.monk[affectedFeature.rawValue] == nil {
             next.individual[affectedFeature.rawValue] = try await backend.snapshot(affectedFeature)
         }
@@ -38,7 +50,14 @@ import Foundation
             if let alternative = feature.alternativeFocusMode {
                 let status = try await backend.read(feature)
                 guard status.available else { throw MonkError(status.detail ?? "This focus mode is unavailable.") }
+                if feature == .oneWindowAtATime {
+                    if try await stageManagerState().enabled != true {
+                        try await backend.apply(.stageManager, intensity: intensity)
+                    }
+                    try await requireStageManagerEnabled()
+                }
                 try await backend.disable(alternative)
+                if feature == .dimBackground { try await restoreStageManagerAfterOneWindow() }
             }
             try await backend.apply(feature, intensity: intensity)
         } else if let snapshot = journal.monk[feature.rawValue] ?? journal.individual[feature.rawValue] {
@@ -50,6 +69,30 @@ import Foundation
         } else {
             try await backend.disable(feature)
         }
+        if feature == .oneWindowAtATime && !enabled { try await restoreStageManagerAfterOneWindow() }
+    }
+
+    private func stageManagerState() async throws -> FeatureState {
+        let state = try await backend.read(.stageManager)
+        guard state.available, state.enabled != nil else {
+            throw MonkError(state.detail ?? "Stage Manager is unavailable or its state is unknown.")
+        }
+        return state
+    }
+
+    private func requireStageManagerEnabled() async throws {
+        guard try await stageManagerState().enabled == true else {
+            throw MonkError("Stage Manager could not be enabled. One-window mode was not changed.")
+        }
+    }
+
+    private func restoreStageManagerAfterOneWindow() async throws {
+        guard let snapshot = journal.stageManagerBeforeOneWindow else { return }
+        try await backend.restore(.stageManager, from: snapshot)
+        try await backend.finishChanges()
+        var next = journal
+        next.stageManagerBeforeOneWindow = nil
+        try commit(next)
     }
 
     public func enableMonk(intensity: Double, focusMode: Feature = .oneWindowAtATime,
@@ -70,6 +113,18 @@ import Foundation
                 next.monk[feature.rawValue] = try await backend.snapshot(feature)
             } catch { issues.append(OperationIssue(feature, error)) }
         }
+        if !next.monk.isEmpty && next.monkFocusBaseline == nil {
+            next.monkFocusBaseline = .init(stageManagerBeforeOneWindow: journal.stageManagerBeforeOneWindow)
+        }
+        if selected == .oneWindowAtATime && next.stageManagerBeforeOneWindow == nil {
+            do {
+                guard next.monk[Feature.stageManager.rawValue] != nil else {
+                    throw MonkError("Could not save Stage Manager. One-window mode was not changed.")
+                }
+                _ = try await stageManagerState()
+                next.stageManagerBeforeOneWindow = try await backend.snapshot(.stageManager)
+            } catch { issues.append(OperationIssue(.oneWindowAtATime, error)) }
+        }
         try commit(next)
         for feature in Feature.allCases where journal.monk[feature.rawValue] != nil {
             if feature == selected.alternativeFocusMode { continue }
@@ -80,11 +135,20 @@ import Foundation
                     guard journal.monk[alternative.rawValue] != nil else {
                         throw MonkError("Could not save the other focus mode. Neither mode was changed.")
                     }
+                    if feature == .oneWindowAtATime {
+                        guard !issues.contains(where: { $0.feature == .stageManager || $0.feature == .oneWindowAtATime }) else {
+                            throw MonkError("Stage Manager could not be enabled. One-window mode was not changed.")
+                        }
+                        try await requireStageManagerEnabled()
+                    }
                     try await backend.disable(alternative)
+                    if feature == .dimBackground { try await restoreStageManagerAfterOneWindow() }
                 }
                 try await backend.apply(feature, intensity: feature == .dimBackground ? dimmingIntensity : intensity)
             }
-            catch { issues.append(OperationIssue(feature, error)) }
+            catch {
+                if !issues.contains(where: { $0.feature == feature }) { issues.append(OperationIssue(feature, error)) }
+            }
         }
         try await backend.finishChanges()
         return issues
@@ -113,9 +177,22 @@ import Foundation
                 try await backend.finishChanges()
                 var next = journal
                 if monk { next.monk.removeValue(forKey: feature.rawValue) }
-                else { next.individual.removeValue(forKey: feature.rawValue) }
+                else {
+                    next.individual.removeValue(forKey: feature.rawValue)
+                    if feature == .stageManager { next.stageManagerBeforeOneWindow = nil }
+                }
                 try commit(next)
             } catch { issues.append(OperationIssue(feature, error)) }
+        }
+        if monk && journal.monk.isEmpty, let baseline = journal.monkFocusBaseline {
+            var next = journal
+            next.stageManagerBeforeOneWindow = baseline.stageManagerBeforeOneWindow
+            next.monkFocusBaseline = nil
+            do { try commit(next) }
+            catch { issues.append(OperationIssue(.oneWindowAtATime, error)) }
+        } else if !monk && journal.individual.isEmpty && !hasMonkSession {
+            do { try await restoreStageManagerAfterOneWindow() }
+            catch { issues.append(OperationIssue(.stageManager, error)) }
         }
         return issues
     }

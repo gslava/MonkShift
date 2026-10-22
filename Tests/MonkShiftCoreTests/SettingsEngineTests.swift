@@ -4,9 +4,11 @@ import MonkShiftCore
 @MainActor final class MemoryStore: RestoreStore {
     var journal = RestoreJournal()
     var failSave = false
+    var beforeSave: ((RestoreJournal) throws -> Void)?
     func load() throws -> RestoreJournal { journal }
     func save(_ journal: RestoreJournal) throws {
         if failSave { throw MonkError("Disk full") }
+        try beforeSave?(journal)
         self.journal = journal
     }
 }
@@ -14,6 +16,8 @@ import MonkShiftCore
 @MainActor final class FakeBackend: SettingsBackend {
     var values: [Feature: Data] = [:]
     var unavailable: Set<Feature> = []
+    var unknown: Set<Feature> = []
+    var ignoredApply: Set<Feature> = []
     var failApply: Set<Feature> = []
     var failRestore: Set<Feature> = []
     var failSnapshot: Set<Feature> = []
@@ -21,12 +25,14 @@ import MonkShiftCore
     var intensities: [Feature: Double] = [:]
     var failFinish = false
     var writes = 0
+    var events: [String] = []
     var beforeWrite: (() async -> Void)?
     var beforeSnapshot: ((Feature) async -> Void)?
     let initial = Data("original".utf8)
     let applied = Data("on".utf8)
     func read(_ feature: Feature) throws -> FeatureState {
-        FeatureState(enabled: values[feature] == applied, detail: "Unavailable", available: !unavailable.contains(feature))
+        FeatureState(enabled: unknown.contains(feature) ? nil : values[feature] == applied,
+            detail: "Unavailable", available: !unavailable.contains(feature))
     }
     func snapshot(_ feature: Feature) async throws -> Data {
         if failSnapshot.contains(feature) { throw MonkError("Snapshot failed") }
@@ -36,24 +42,195 @@ import MonkShiftCore
     func apply(_ feature: Feature, intensity: Double) async throws {
         await beforeWrite?()
         writes += 1
-        values[feature] = applied // Simulate a partial mutation before an OS error.
+        events.append("apply:\(feature.rawValue)")
+        if !ignoredApply.contains(feature) { values[feature] = applied } // Also simulate partial writes before errors.
         intensities[feature] = intensity
         if failApply.contains(feature) { throw MonkError("Apply failed") }
     }
     func disable(_ feature: Feature) async throws {
         if failDisable.contains(feature) { throw MonkError("Disable failed") }
         await beforeWrite?(); writes += 1; values[feature] = Data("off".utf8)
+        events.append("disable:\(feature.rawValue)")
     }
     func restore(_ feature: Feature, from data: Data) async throws {
         if failRestore.contains(feature) { throw MonkError("Display disconnected") }
         await beforeWrite?()
         writes += 1
         values[feature] = data
+        events.append("restore:\(feature.rawValue)")
     }
     func finishChanges() throws { if failFinish { throw MonkError("Dock reload failed") } }
 }
 
 @MainActor final class SettingsEngineTests {
+    func testOneWindowRestoresStageManagerForEachCycle() async throws {
+        for originallyEnabled in [false, true] {
+            let backend = FakeBackend(), store = MemoryStore()
+            let original = originallyEnabled ? backend.applied : backend.initial
+            backend.values[.stageManager] = original
+            let engine = try SettingsEngine(backend: backend, store: store)
+            backend.beforeWrite = {
+                await expectEqual(store.journal.individual[Feature.stageManager.rawValue], original)
+                await expectEqual(store.journal.individual[Feature.oneWindowAtATime.rawValue], backend.initial)
+                await expectEqual(store.journal.individual[Feature.dimBackground.rawValue], backend.initial)
+                await expectEqual(store.journal.stageManagerBeforeOneWindow, original)
+            }
+            try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+            await expectTrue(try backend.read(.stageManager).enabled == true)
+            if !originallyEnabled {
+                await expectTrue(backend.events.firstIndex(of: "apply:stageManager")! < backend.events.firstIndex(of: "apply:oneWindowAtATime")!)
+            }
+            try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+            try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
+            await expectEqual(backend.values[.stageManager], original)
+            await expectEqual(store.journal.stageManagerBeforeOneWindow, nil)
+            backend.beforeWrite = nil
+            // Each new cycle restores its own immediate baseline, while Restore All
+            // still uses the first baseline saved before any individual changes.
+            let second = originallyEnabled ? backend.initial : backend.applied
+            backend.values[.stageManager] = second
+            try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+            try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
+            await expectEqual(backend.values[.stageManager], second)
+            await expectTrue(try await engine.restoreIndividual().isEmpty)
+            await expectEqual(backend.values[.stageManager], original)
+        }
+    }
+
+    func testDimmingSwitchRestoresStageManager() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        let engine = try SettingsEngine(backend: backend, store: store)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        try await engine.set(.dimBackground, enabled: true, intensity: 0.7)
+        await expectEqual(backend.values[.stageManager], backend.initial)
+        await expectEqual(try backend.read(.oneWindowAtATime).enabled, false)
+        await expectEqual(try backend.read(.dimBackground).enabled, true)
+        await expectEqual(store.journal.stageManagerBeforeOneWindow, nil)
+        await expectTrue(backend.events.firstIndex(of: "restore:stageManager")! < backend.events.firstIndex(of: "apply:dimBackground")!)
+    }
+
+    func testStageManagerPrerequisiteFailuresPreserveOtherMode() async throws {
+        for failure in 0..<6 {
+            let backend = FakeBackend(), store = MemoryStore()
+            backend.values[.dimBackground] = backend.applied
+            let engine = try SettingsEngine(backend: backend, store: store)
+            switch failure {
+            case 0: backend.failSnapshot = [.stageManager]
+            case 1: store.failSave = true
+            case 2: backend.unavailable = [.stageManager]
+            case 3: backend.unknown = [.stageManager]
+            case 4: backend.ignoredApply = [.stageManager]
+            default: backend.failApply = [.stageManager]
+            }
+            await expectThrows(try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5))
+            await expectEqual(backend.values[.dimBackground], backend.applied)
+            await expectEqual(try backend.read(.oneWindowAtATime).enabled, false)
+            if failure < 4 { await expectEqual(backend.writes, 0) }
+            else { await expectEqual(store.journal.stageManagerBeforeOneWindow, backend.initial) }
+        }
+    }
+
+    func testStageManagerRestoreRetryAfterRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("StageRestore-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("restore.json")
+        let backend = FakeBackend()
+        let engine = try SettingsEngine(backend: backend, store: FileRestoreStore(url: url))
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        backend.failRestore = [.stageManager]
+        await expectThrows(try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5))
+        let restarted = try SettingsEngine(backend: backend, store: FileRestoreStore(url: url))
+        await expectEqual(restarted.journal.stageManagerBeforeOneWindow, backend.initial)
+        backend.failRestore = []
+        try await restarted.set(.dimBackground, enabled: true, intensity: 0.7)
+        await expectEqual(backend.values[.stageManager], backend.initial)
+        await expectEqual(restarted.journal.stageManagerBeforeOneWindow, nil)
+        await expectTrue(try await restarted.restoreIndividual().isEmpty)
+    }
+
+    func testStageManagerCycleClearFailureIsRetryable() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        let engine = try SettingsEngine(backend: backend, store: store)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        backend.beforeWrite = { store.failSave = true }
+        await expectThrows(try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5))
+        await expectEqual(backend.values[.stageManager], backend.initial)
+        await expectEqual(store.journal.stageManagerBeforeOneWindow, backend.initial)
+        backend.beforeWrite = nil
+        store.failSave = false
+        let restarted = try SettingsEngine(backend: backend, store: store)
+        try await restarted.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
+        await expectEqual(store.journal.stageManagerBeforeOneWindow, nil)
+    }
+
+    func testMonkPreservesEarlierFocusCycle() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        let engine = try SettingsEngine(backend: backend, store: store)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        await expectTrue(try await engine.enableMonk(intensity: 0.5, focusMode: .dimBackground).isEmpty)
+        await expectEqual(backend.values[.stageManager], backend.initial)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+        await expectEqual(backend.values[.stageManager], backend.applied)
+        await expectEqual(try backend.read(.oneWindowAtATime).enabled, true)
+        await expectEqual(store.journal.stageManagerBeforeOneWindow, backend.initial)
+        try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
+        await expectEqual(backend.values[.stageManager], backend.initial)
+        await expectTrue(try await engine.restoreIndividual().isEmpty)
+    }
+
+    func testOneWindowWithinMonkRestoresSessionStageState() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        let engine = try SettingsEngine(backend: backend, store: store)
+        _ = try await engine.enableMonk(intensity: 0.5, focusMode: .dimBackground)
+        try await engine.set(.stageManager, enabled: false, intensity: 0.5)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        await expectEqual(backend.values[.stageManager], backend.applied)
+        try await engine.set(.dimBackground, enabled: true, intensity: 0.7)
+        await expectEqual(backend.values[.stageManager], backend.initial)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+        await expectEqual(store.journal.stageManagerBeforeOneWindow, nil)
+        await expectEqual(store.journal.monkFocusBaseline, nil)
+        await expectFalse(engine.hasMonkSession)
+    }
+
+    func testMonkStageManagerFailurePreservesOtherMode() async throws {
+        for unavailable in [false, true] {
+            let backend = FakeBackend(), store = MemoryStore()
+            backend.values[.dimBackground] = backend.applied
+            if unavailable { backend.unavailable = [.stageManager] }
+            else { backend.failApply = [.stageManager] }
+            let engine = try SettingsEngine(backend: backend, store: store)
+            let issues = try await engine.enableMonk(intensity: 0.5)
+            await expectEqual(Set(issues.map(\.feature)), [.stageManager, .oneWindowAtATime])
+            await expectEqual(backend.values[.dimBackground], backend.applied)
+            await expectEqual(try backend.read(.oneWindowAtATime).enabled, false)
+        }
+    }
+
+    func testLegacyJournalDecodesWithoutFocusMetadata() async throws {
+        let data = Data("{\"version\":1,\"individual\":{},\"monk\":{}}".utf8)
+        let journal = try JSONDecoder().decode(RestoreJournal.self, from: data)
+        await expectEqual(journal.stageManagerBeforeOneWindow, nil)
+        await expectEqual(journal.monkFocusBaseline, nil)
+    }
+
+    func testMonkFocusCleanupFailureRetainsSession() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        let engine = try SettingsEngine(backend: backend, store: store)
+        _ = try await engine.enableMonk(intensity: 0.5)
+        store.beforeSave = { candidate in
+            if candidate.monk.isEmpty && candidate.monkFocusBaseline == nil { throw MonkError("Disk full") }
+        }
+        await expectFalse(try await engine.restoreMonk().isEmpty)
+        await expectTrue(engine.hasMonkSession)
+        await expectTrue(engine.journal.monk.isEmpty)
+        store.beforeSave = nil
+        let restarted = try SettingsEngine(backend: backend, store: store)
+        await expectTrue(try await restarted.restoreMonk().isEmpty)
+        await expectFalse(restarted.hasMonkSession)
+        await expectEqual(restarted.journal.stageManagerBeforeOneWindow, nil)
+    }
+
     func testFocusModesSaveBothBaselinesBeforeSwitching() async throws {
         let backend = FakeBackend(), store = MemoryStore()
         backend.values[.oneWindowAtATime] = backend.applied
@@ -217,7 +394,7 @@ import MonkShiftCore
         let engine = try SettingsEngine(backend: backend, store: store)
         backend.beforeWrite = { await expectEqual(store.journal.monk.count, Feature.allCases.count - 1) }
         let issues = try await engine.enableMonk(intensity: 0.5)
-        await expectEqual(issues.map(\.feature), [.stageManager])
+        await expectEqual(issues.map(\.feature), [.stageManager, .oneWindowAtATime])
         await expectTrue(engine.hasMonkSession)
     }
 

@@ -101,16 +101,20 @@ import MonkShiftCore
             created.center()
             window = created
         }
+        // Join the Dock and app switcher only while the controls window exists.
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
         NSApp.activate(ignoringOtherApps: true)
+        if window?.isMiniaturized == true { window?.deminiaturize(nil) }
         window?.makeKeyAndOrderFront(nil)
         model.refresh()
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Release the hosting hierarchy when closed; the native menu and model remain.
-        let closing = window
+        guard let closing = window, (notification.object as? NSWindow) === closing else { return }
         window = nil
-        DispatchQueue.main.async { closing?.contentViewController = nil }
+        NSApp.setActivationPolicy(.accessory)
+        // Release the hosting hierarchy when closed; the native menu and model remain.
+        DispatchQueue.main.async { closing.contentViewController = nil }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -125,12 +129,31 @@ import MonkShiftCore
 
     private func installApplicationMenu() {
         let main = NSMenu()
-        let app = NSMenuItem()
-        let menu = NSMenu()
-        let quit = NSMenuItem(title: "Quit MonkShift", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quit)
-        app.submenu = menu
-        main.addItem(app)
+        let applicationMenu = NSMenu(title: "MonkShift")
+        applicationMenu.addItem(withTitle: "Hide MonkShift", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = applicationMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        applicationMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        applicationMenu.addItem(.separator())
+        applicationMenu.addItem(withTitle: "Quit MonkShift", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        let fileMenu = NSMenu(title: "File")
+        let open = fileMenu.addItem(withTitle: "Open MonkShift", action: #selector(showWindow(_:)), keyEquivalent: "")
+        open.target = self
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+
+        for menu in [applicationMenu, fileMenu, windowMenu] {
+            let item = NSMenuItem(title: menu.title, action: nil, keyEquivalent: "")
+            item.submenu = menu
+            main.addItem(item)
+        }
         NSApp.mainMenu = main
+        NSApp.windowsMenu = windowMenu
     }
 }

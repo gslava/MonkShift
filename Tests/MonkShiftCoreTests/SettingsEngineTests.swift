@@ -63,6 +63,123 @@ import MonkShiftCore
 }
 
 @MainActor final class SettingsEngineTests {
+    func testOneWindowRestoresBothPrerequisitesForEachCycle() async throws {
+        for stageEnabled in [false, true] {
+            for recentHidden in [false, true] {
+                let backend = FakeBackend(), store = MemoryStore()
+                let stage = stageEnabled ? backend.applied : backend.initial
+                let recent = recentHidden ? backend.applied : backend.initial
+                backend.values[.stageManager] = stage
+                backend.values[.hideRecentApps] = recent
+                let engine = try SettingsEngine(backend: backend, store: store)
+                backend.beforeWrite = {
+                    await expectEqual(store.journal.individual[Feature.hideRecentApps.rawValue], recent)
+                    await expectEqual(store.journal.hideRecentAppsBeforeOneWindow, recent)
+                    await expectEqual(store.journal.stageManagerBeforeOneWindow, stage)
+                }
+                try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+                await expectEqual(backend.values[.stageManager], backend.applied)
+                await expectEqual(backend.values[.hideRecentApps], backend.applied)
+                if !recentHidden {
+                    await expectTrue(backend.events.firstIndex(of: "apply:hideRecentApps")! < backend.events.firstIndex(of: "apply:oneWindowAtATime")!)
+                }
+                try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+                backend.beforeWrite = nil
+                try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
+                await expectEqual(backend.values[.stageManager], stage)
+                await expectEqual(backend.values[.hideRecentApps], recent)
+                await expectEqual(store.journal.hideRecentAppsBeforeOneWindow, nil)
+                let secondRecent = recentHidden ? backend.initial : backend.applied
+                backend.values[.hideRecentApps] = secondRecent
+                try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+                try await engine.set(.dimBackground, enabled: true, intensity: 0.7)
+                await expectEqual(backend.values[.hideRecentApps], secondRecent)
+                await expectTrue(backend.events.firstIndex(of: "restore:hideRecentApps")! < backend.events.firstIndex(of: "apply:dimBackground")!)
+                await expectTrue(try await engine.restoreIndividual().isEmpty)
+                await expectEqual(backend.values[.hideRecentApps], recent)
+            }
+        }
+    }
+
+    func testRecentAppsPrerequisiteFailuresPreserveOtherMode() async throws {
+        for failure in 0..<5 {
+            let backend = FakeBackend(), store = MemoryStore()
+            backend.values[.dimBackground] = backend.applied
+            switch failure {
+            case 0: backend.failSnapshot = [.hideRecentApps]
+            case 1: backend.unavailable = [.hideRecentApps]
+            case 2: backend.unknown = [.hideRecentApps]
+            case 3: backend.ignoredApply = [.hideRecentApps]
+            default: backend.failApply = [.hideRecentApps]
+            }
+            let engine = try SettingsEngine(backend: backend, store: store)
+            await expectThrows(try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5))
+            await expectEqual(backend.values[.dimBackground], backend.applied)
+            await expectEqual(try backend.read(.oneWindowAtATime).enabled, false)
+            if failure < 3 { await expectEqual(backend.writes, 0) }
+            else { await expectEqual(store.journal.hideRecentAppsBeforeOneWindow, backend.initial) }
+        }
+    }
+
+    func testRecentAppsRestoreFailureSurvivesRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("RecentRestore-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileRestoreStore(url: directory.appendingPathComponent("restore.json"))
+        let backend = FakeBackend()
+        let engine = try SettingsEngine(backend: backend, store: store)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        backend.failRestore = [.hideRecentApps]
+        await expectThrows(try await engine.set(.dimBackground, enabled: true, intensity: 0.7))
+        let restarted = try SettingsEngine(backend: backend, store: store)
+        await expectEqual(restarted.journal.stageManagerBeforeOneWindow, nil)
+        await expectEqual(restarted.journal.hideRecentAppsBeforeOneWindow, backend.initial)
+        await expectEqual(try backend.read(.dimBackground).enabled, false)
+        backend.failRestore = []
+        try await restarted.set(.dimBackground, enabled: true, intensity: 0.7)
+        await expectEqual(backend.values[.hideRecentApps], backend.initial)
+        await expectEqual(restarted.journal.hideRecentAppsBeforeOneWindow, nil)
+        await expectTrue(try await restarted.restoreIndividual().isEmpty)
+    }
+
+    func testMonkPreservesRecentAppsFocusBaseline() async throws {
+        let backend = FakeBackend(), store = MemoryStore()
+        let engine = try SettingsEngine(backend: backend, store: store)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        await expectTrue(try await engine.enableMonk(intensity: 0.5, focusMode: .dimBackground).isEmpty)
+        await expectEqual(backend.values[.hideRecentApps], backend.initial)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+        await expectEqual(backend.values[.hideRecentApps], backend.applied)
+        await expectEqual(store.journal.hideRecentAppsBeforeOneWindow, backend.initial)
+        try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
+        await expectEqual(backend.values[.hideRecentApps], backend.initial)
+        _ = try await engine.enableMonk(intensity: 0.5, focusMode: .dimBackground)
+        try await engine.set(.hideRecentApps, enabled: false, intensity: 0.5)
+        try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+        await expectEqual(backend.values[.hideRecentApps], backend.applied)
+        try await engine.set(.dimBackground, enabled: true, intensity: 0.7)
+        await expectEqual(try backend.read(.hideRecentApps).enabled, false)
+        await expectTrue(try await engine.restoreMonk().isEmpty)
+        await expectEqual(store.journal.hideRecentAppsBeforeOneWindow, nil)
+    }
+
+    func testMonkRecentAppsFailuresPreserveOtherMode() async throws {
+        for failure in 0..<4 {
+            let backend = FakeBackend(), store = MemoryStore()
+            backend.values[.dimBackground] = backend.applied
+            switch failure {
+            case 0: backend.failSnapshot = [.hideRecentApps]
+            case 1: backend.unavailable = [.hideRecentApps]
+            case 2: backend.ignoredApply = [.hideRecentApps]
+            default: backend.failApply = [.hideRecentApps]
+            }
+            let engine = try SettingsEngine(backend: backend, store: store)
+            let issues = try await engine.enableMonk(intensity: 0.5)
+            await expectTrue(issues.contains { $0.feature == .oneWindowAtATime })
+            await expectEqual(backend.values[.dimBackground], backend.applied)
+            await expectEqual(try backend.read(.oneWindowAtATime).enabled, false)
+        }
+    }
+
     func testOneWindowRestoresStageManagerForEachCycle() async throws {
         for originallyEnabled in [false, true] {
             let backend = FakeBackend(), store = MemoryStore()
@@ -81,10 +198,10 @@ import MonkShiftCore
                 await expectTrue(backend.events.firstIndex(of: "apply:stageManager")! < backend.events.firstIndex(of: "apply:oneWindowAtATime")!)
             }
             try await engine.set(.oneWindowAtATime, enabled: true, intensity: 0.5)
+            backend.beforeWrite = nil
             try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
             await expectEqual(backend.values[.stageManager], original)
             await expectEqual(store.journal.stageManagerBeforeOneWindow, nil)
-            backend.beforeWrite = nil
             // Each new cycle restores its own immediate baseline, while Restore All
             // still uses the first baseline saved before any individual changes.
             let second = originallyEnabled ? backend.initial : backend.applied
@@ -211,7 +328,12 @@ import MonkShiftCore
         let data = Data("{\"version\":1,\"individual\":{},\"monk\":{}}".utf8)
         let journal = try JSONDecoder().decode(RestoreJournal.self, from: data)
         await expectEqual(journal.stageManagerBeforeOneWindow, nil)
+        await expectEqual(journal.hideRecentAppsBeforeOneWindow, nil)
         await expectEqual(journal.monkFocusBaseline, nil)
+        let oldFocus = Data("{\"version\":1,\"individual\":{},\"monk\":{},\"monkFocusBaseline\":{\"stageManagerBeforeOneWindow\":\"b3JpZ2luYWw=\"}}".utf8)
+        let oldJournal = try JSONDecoder().decode(RestoreJournal.self, from: oldFocus)
+        await expectEqual(oldJournal.monkFocusBaseline?.hideRecentAppsBeforeOneWindow, nil)
+        await expectEqual(oldJournal.monkFocusBaseline?.stageManagerBeforeOneWindow, Data("original".utf8))
     }
 
     func testMonkFocusCleanupFailureRetainsSession() async throws {

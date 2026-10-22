@@ -16,25 +16,37 @@ import MonkShiftCore
     @Published private(set) var preferredFocusMode: Feature
     @Published private(set) var requestedValues: [Feature: Bool] = [:]
     @Published private(set) var requestedSession: Bool?
-    var isEditingIntensity = false
-    var isEditingDimmingIntensity = false
+    @Published private(set) var profileLibrary: ProfileLibrary?
+    @Published private(set) var profileError: String?
+    @Published var showNewProfile = false
+    var isEditingIntensity = false {
+        didSet { if oldValue && !isEditingIntensity { scheduleExternalRefresh() } }
+    }
+    var isEditingDimmingIntensity = false {
+        didSet { if oldValue && !isEditingDimmingIntensity { scheduleExternalRefresh() } }
+    }
     var onRefresh: (() -> Void)?
     private let backend: any ObservedSettingsBackend
     private let defaults: UserDefaults
+    private let profileStore: ProfileStore
     private var engine: SettingsEngine?
     @Published private(set) var refreshing = false
     private var storageError: String?
     private enum Change {
         case setting(Feature, Bool, Double)
         case monk(Bool, Double, Feature, Double)
+        case profile(SettingsProfile)
         case restoreAll
     }
     private struct PendingChange {
         let change: Change
         let completion: ((Result<Void, Error>) -> Void)?
+        let profileID: String?
     }
     private var pendingChanges: [PendingChange] = []
     private var settledRefresh: Task<Void, Never>?
+    private var externalRefresh: Task<Void, Never>?
+    private var externalRefreshPending = false
     private var intensityRevision = 0
     private var dimmingRevision = 0
     private var quitRequested = false
@@ -45,6 +57,8 @@ import MonkShiftCore
     func prepareToQuit(onReady: @escaping () -> Void) -> Bool {
         quitRequested = true
         settledRefresh?.cancel()
+        externalRefresh?.cancel()
+        externalRefreshPending = false
         guard busy || hasPendingChanges else { return false }
         if quitCompletion == nil { quitCompletion = onReady }
         return true
@@ -53,12 +67,14 @@ import MonkShiftCore
     init(directory: URL, backend: (any ObservedSettingsBackend)? = nil,
         permissions: PermissionManager? = nil, shortcuts: ShortcutManager? = nil,
         accessibility: AccessibilityPermissionManager? = nil,
+        profileStore: ProfileStore? = nil,
         defaults: UserDefaults = .standard) {
         self.permissions = permissions ?? PermissionManager()
         let accessibility = accessibility ?? AccessibilityPermissionManager()
         self.accessibility = accessibility
         self.shortcuts = shortcuts ?? ShortcutManager()
         self.defaults = defaults
+        self.profileStore = profileStore ?? FileProfileStore(url: directory.appendingPathComponent("profiles.json"))
         intensity = defaults.object(forKey: "intensity") == nil ? 0.5 : min(1, max(0, defaults.double(forKey: "intensity")))
         dimmingIntensity = BackgroundDimmingService.clamp(defaults.object(forKey: "dimmingIntensity") == nil ? 0.5 : defaults.double(forKey: "dimmingIntensity"))
         preferredFocusMode = defaults.string(forKey: "preferredFocusMode") == Feature.dimBackground.rawValue ? .dimBackground : .oneWindowAtATime
@@ -69,6 +85,16 @@ import MonkShiftCore
             storageError = "Could not open the restore file. Settings changes are blocked to preserve it. \(error.localizedDescription)"
             generalError = storageError
         }
+        do {
+            let loaded = try self.profileStore.load()
+            try loaded?.validate()
+            profileLibrary = loaded
+            if let settings = profileLibrary?.selected.settings {
+                intensity = settings.intensity
+                dimmingIntensity = settings.dimmingIntensity
+                preferredFocusMode = settings.focusMode
+            }
+        } catch { profileError = "Could not open profiles. The original file has been preserved. \(error.localizedDescription)" }
         updateJournalState()
         self.permissions.onUserCheckFinished = { [weak self] in self?.refresh() }
         accessibility.onChange = { [weak self] in self?.onRefresh?() }
@@ -81,6 +107,13 @@ import MonkShiftCore
 
     // Availability is separate from transient work. Actions are serialized below.
     var canChange: Bool { permissions.granted && engine != nil }
+    var profiles: [SettingsProfile] { profileLibrary?.profiles ?? [] }
+    var selectedProfileID: String { profileLibrary?.selectedID ?? "default" }
+    var selectedProfileName: String { profileLibrary?.selected.name ?? "Default" }
+    var canSelectProfile: Bool {
+        canChange && profileLibrary != nil && !quitRequested && !isEditingIntensity && !isEditingDimmingIntensity
+    }
+    var canCreateProfile: Bool { canSelectProfile && !busy && !refreshing }
     var canAdjustIntensity: Bool {
         canChange && states[.grayscale]?.available == true && states[.grayscale]?.enabled != nil
     }
@@ -104,19 +137,43 @@ import MonkShiftCore
         return summary.detail
     }
     var statusNeedsAttention: Bool {
-        generalError != nil || !issues.isEmpty
+        generalError != nil || profileError != nil || !issues.isEmpty
     }
 
     func refresh() {
         guard !quitRequested, !refreshing, !busy, !isEditingIntensity, !isEditingDimmingIntensity else { return }
+        externalRefresh?.cancel()
+        externalRefresh = nil
+        externalRefreshPending = false
         refreshing = true
         Task { @MainActor in
-            defer { refreshing = false; onRefresh?(); processChanges() }
+            defer { refreshing = false; onRefresh?(); processChanges(); scheduleExternalRefresh() }
             accessibility.refresh()
             guard await permissions.refresh() else { shortcuts.deactivate(); states.removeAll(); return }
             shortcuts.activate()
             await readCurrentStates()
+            initializeProfilesIfNeeded()
             updateJournalState()
+        }
+    }
+
+    func requestExternalRefresh() {
+        guard !quitRequested else { return }
+        externalRefreshPending = true
+        scheduleExternalRefresh()
+    }
+
+    private func scheduleExternalRefresh() {
+        guard externalRefreshPending, externalRefresh == nil, !quitRequested, !busy, !refreshing,
+              !isEditingIntensity, !isEditingDimmingIntensity else { return }
+        // One delayed read for an event burst. A blocked read remains pending;
+        // completing the operation/slider/refresh schedules it again.
+        externalRefresh = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) }
+            catch { return }
+            guard let self else { return }
+            self.externalRefresh = nil
+            self.refresh()
         }
     }
 
@@ -144,6 +201,7 @@ import MonkShiftCore
         let queuedDimming = pendingChanges.dropFirst(busy ? 1 : 0).contains {
             if case .setting(.dimBackground, _, _) = $0.change { return true }
             if case .monk(true, _, .dimBackground, _) = $0.change { return true }
+            if case .profile = $0.change { return true }
             return false
         }
         if current[.dimBackground]?.enabled == true, !isEditingDimmingIntensity,
@@ -156,6 +214,7 @@ import MonkShiftCore
         pendingChanges.dropFirst(busy ? 1 : 0).contains {
             if case .setting(.grayscale, _, _) = $0.change { return true }
             if case .monk(true, _, _, _) = $0.change { return true }
+            if case .profile = $0.change { return true }
             return false
         }
     }
@@ -171,7 +230,7 @@ import MonkShiftCore
             return
         }
         settledRefresh?.cancel()
-        pendingChanges.append(PendingChange(change: change, completion: completion))
+        pendingChanges.append(PendingChange(change: change, completion: completion, profileID: profileLibrary?.selectedID))
         updateRequestedValues()
         onRefresh?()
         processChanges()
@@ -185,10 +244,15 @@ import MonkShiftCore
             case let .setting(feature, enabled, _):
                 values[feature] = enabled
                 if enabled, let alternative = feature.alternativeFocusMode { values[alternative] = false }
-                if enabled && feature == .oneWindowAtATime { values[.stageManager] = true }
+                if enabled && feature == .oneWindowAtATime {
+                    values[.stageManager] = true
+                    values[.hideRecentApps] = true
+                }
             case let .monk(enabled, _, mode, _):
                 session = enabled
                 if enabled { values[mode] = true; if let alternative = mode.alternativeFocusMode { values[alternative] = false } }
+            case let .profile(profile):
+                values.merge(profile.settings.normalized.values) { _, new in new }
             case .restoreAll: session = false
             }
         }
@@ -234,6 +298,10 @@ import MonkShiftCore
                 catch { generalError = error.localizedDescription; failure = error }
                 await readCurrentStates()
                 updateJournalState()
+                if failure == nil {
+                    do { try saveProfileChanges(from: change, profileID: pending.profileID) }
+                    catch { profileError = error.localizedDescription; failure = error }
+                }
                 pendingChanges.removeFirst()
                 updateRequestedValues()
                 onRefresh?()
@@ -241,6 +309,7 @@ import MonkShiftCore
                 else { pending.completion?(.success(())) }
             }
             busy = false
+            scheduleExternalRefresh()
             onRefresh?()
             if let completion = quitCompletion {
                 quitCompletion = nil
@@ -270,6 +339,19 @@ import MonkShiftCore
         case let .monk(enabled, intensity, mode, dimmingIntensity):
             if enabled { return try await engine.enableMonk(intensity: intensity, focusMode: mode, dimmingIntensity: dimmingIntensity) }
             return try await engine.restoreMonk()
+        case let .profile(profile):
+            // Earlier queued edits may have just saved a newer version of this
+            // profile. Resolve it when its turn starts, without changing order.
+            let settings = (profileLibrary?.profiles.first(where: { $0.id == profile.id })?.settings ?? profile.settings).normalized
+            if pendingChanges.count == 1 && selectedProfileID == profile.id {
+                intensity = settings.intensity
+                dimmingIntensity = settings.dimmingIntensity
+                preferredFocusMode = settings.focusMode
+            }
+            if settings.values[.dimBackground] == true, !accessibility.refresh() {
+                return [OperationIssue(.dimBackground, MonkError("Allow Accessibility in System Settings to dim background windows."))]
+            }
+            return try await engine.applyProfile(settings)
         case .restoreAll:
             var issues = try await engine.restoreMonk()
             if !engine.hasMonkSession { issues += try await engine.restoreIndividual() }
@@ -320,6 +402,7 @@ import MonkShiftCore
     func commitIntensity() {
         intensityRevision += 1
         defaults.set(intensity, forKey: "intensity")
+        savePreferredProfileIntensity()
         if displayedEnabled(.grayscale) == true { set(.grayscale, enabled: true) }
     }
 
@@ -327,11 +410,19 @@ import MonkShiftCore
         dimmingIntensity = BackgroundDimmingService.clamp(dimmingIntensity)
         dimmingRevision += 1
         defaults.set(dimmingIntensity, forKey: "dimmingIntensity")
+        savePreferredProfileIntensity()
         if displayedEnabled(.dimBackground) == true { set(.dimBackground, enabled: true) }
     }
 
     func requestStartupPermissions() { accessibility.requestAtStartup(); refresh() }
-    func shutdown() { backend.shutdown() }
+    func shutdown() {
+        quitRequested = true
+        settledRefresh?.cancel()
+        externalRefresh?.cancel()
+        externalRefresh = nil
+        externalRefreshPending = false
+        backend.shutdown()
+    }
 
     func restoreAll() {
         enqueue(.restoreAll)
@@ -339,6 +430,86 @@ import MonkShiftCore
 
     func issue(for feature: Feature) -> String? { issues.first { $0.feature == feature }?.message }
     func showWallpaperSettings() { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!) }
+
+    private func currentProfileSettings() -> ProfileSettings {
+        let values = states.reduce(into: [Feature: Bool]()) { result, entry in
+            if entry.value.available, let enabled = entry.value.enabled { result[entry.key] = enabled }
+        }
+        return ProfileSettings(values: values, intensity: intensity, dimmingIntensity: dimmingIntensity, focusMode: preferredFocusMode)
+    }
+
+    private func initializeProfilesIfNeeded() {
+        guard profileLibrary == nil, profileError == nil, !states.isEmpty else { return }
+        do { try saveLibrary(ProfileLibrary(settings: currentProfileSettings())) }
+        catch { profileError = "Could not save Default profile. \(error.localizedDescription)" }
+    }
+
+    private func saveLibrary(_ library: ProfileLibrary) throws {
+        try library.validate()
+        try profileStore.save(library)
+        profileLibrary = library
+        profileError = nil
+    }
+
+    func createProfile(name: String) throws {
+        guard canCreateProfile, var library = profileLibrary else { throw MonkError("Wait for the current settings operation to finish.") }
+        try library.add(name: name)
+        try saveLibrary(library)
+        onRefresh?()
+    }
+
+    func selectProfile(id: String) {
+        guard canSelectProfile, var library = profileLibrary,
+              let profile = library.profiles.first(where: { $0.id == id }) else { return }
+        library.selectedID = id
+        do { try saveLibrary(library) }
+        catch { profileError = "Could not select profile. \(error.localizedDescription)"; onRefresh?(); return }
+        intensityRevision += 1
+        dimmingRevision += 1
+        intensity = profile.settings.intensity
+        dimmingIntensity = profile.settings.dimmingIntensity
+        preferredFocusMode = profile.settings.normalized.focusMode
+        defaults.set(intensity, forKey: "intensity")
+        defaults.set(dimmingIntensity, forKey: "dimmingIntensity")
+        defaults.set(preferredFocusMode.rawValue, forKey: "preferredFocusMode")
+        enqueue(.profile(profile))
+    }
+
+    private func savePreferredProfileIntensity() {
+        guard var library = profileLibrary else { return }
+        var settings = library.selected.settings
+        settings.intensity = intensity
+        settings.dimmingIntensity = dimmingIntensity
+        library.update(settings, for: library.selectedID)
+        do { try saveLibrary(library) }
+        catch { profileError = "Could not save profile. \(error.localizedDescription)" }
+        onRefresh?()
+    }
+
+    private func saveProfileChanges(from change: Change, profileID: String?) throws {
+        guard var library = profileLibrary, let profileID,
+              let profile = library.profiles.first(where: { $0.id == profileID }) else { return }
+        var settings = profile.settings
+        switch change {
+        case let .setting(feature, enabled, amount):
+            let affected = feature.alternativeFocusMode != nil ?
+                [Feature.oneWindowAtATime, .dimBackground, .stageManager, .hideRecentApps] : [feature]
+            for feature in affected {
+                if let state = states[feature], state.available, let enabled = state.enabled { settings.values[feature] = enabled }
+            }
+            if enabled && feature.alternativeFocusMode != nil { settings.focusMode = feature }
+            if feature == .grayscale { settings.intensity = amount }
+            if feature == .dimBackground { settings.dimmingIntensity = amount }
+        case let .monk(true, amount, mode, dimmingAmount):
+            settings = currentProfileSettings()
+            settings.intensity = amount
+            settings.dimmingIntensity = dimmingAmount
+            settings.focusMode = mode
+        default: return // Restoring settings must not erase a saved profile.
+        }
+        library.update(settings, for: profileID)
+        try saveLibrary(library)
+    }
 
 #if MONKSHIFT_PREVIEW
     enum PreviewState: String, CaseIterable {
@@ -353,7 +524,7 @@ import MonkShiftCore
             model.states[feature] = FeatureState(enabled: false)
         }
         model.states[.hideRecentApps]?.detail = "Takes effect while Stage Manager is on."
-        model.states[.oneWindowAtATime]?.detail = "Automatically enables Stage Manager. Turning this mode off or choosing dimming restores its previous state."
+        model.states[.oneWindowAtATime]?.detail = "Automatically enables Stage Manager and Hide recent apps. Turning this mode off or choosing dimming restores both previous states."
         model.states[.blackWallpaper]?.detail = "Connected displays in the current desktop Space."
         switch state {
         case .off: break
@@ -390,6 +561,7 @@ import MonkShiftCore
         case .refreshing:
             model.refreshing = true
         }
+        model.initializeProfilesIfNeeded()
         return model
     }
 #endif

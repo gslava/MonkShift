@@ -3,6 +3,7 @@ import Foundation
 public struct RestoreJournal: Codable, Equatable {
     public struct FocusBaseline: Codable, Equatable {
         public var stageManagerBeforeOneWindow: Data?
+        public var hideRecentAppsBeforeOneWindow: Data? = nil
     }
 
     public var version = 1
@@ -11,6 +12,7 @@ public struct RestoreJournal: Codable, Equatable {
     // Optional fields keep existing journals readable. The session baseline also
     // preserves an individual focus cycle when Monk Mode temporarily replaces it.
     public var stageManagerBeforeOneWindow: Data?
+    public var hideRecentAppsBeforeOneWindow: Data?
     public var monkFocusBaseline: FocusBaseline?
     public init() {}
 }

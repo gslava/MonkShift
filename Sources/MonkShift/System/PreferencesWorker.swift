@@ -66,7 +66,7 @@ actor PreferencesWorker {
                 detail: "Takes effect while Stage Manager is on.")
         case .oneWindowAtATime:
             return FeatureState(enabled: (value(windowManager, "AppWindowGroupingBehavior") as? NSNumber)?.boolValue ?? false,
-                detail: "Automatically enables Stage Manager. Turning this mode off or choosing dimming restores its previous state.")
+                detail: "Automatically enables Stage Manager and Hide recent apps. Turning this mode off or choosing dimming restores both previous states.")
         case .hideDesktopItems:
             let keys = keys(feature)!.1
             let hidden = try keys.map { key -> Bool in

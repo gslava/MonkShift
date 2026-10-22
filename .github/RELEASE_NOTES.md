@@ -1,15 +1,25 @@
-## Highlights since v0.1.2
+## Highlights since v0.1.3
 
-- **Compact controls:** all checkboxes and both sliders fit in two columns
-  without scrolling. Detailed explanations are available through contextual help.
-- **Window access:** use the Dock and Command + Tab while the window is open.
-  Closing it returns MonkShift to the menu bar. Native menus support hiding,
-  minimizing and reopening the window.
-- **Stage Manager:** one-window mode enables it automatically and restores its
-  previous state when disabled or replaced with dimming. Restore data survives
-  restarts and failed writes; existing journals remain compatible.
-- **Version visibility:** the app version is centered in the footer, with the
-  build number in its tooltip. Light and dark screenshots are updated.
+- **Settings profiles:** Default captures your current settings. Create named
+  copies and switch profiles from the window or menu bar to apply them
+  immediately. Changes save automatically; original restore baselines are kept.
+- **Focus shortcuts:** Control + Option + Command + W toggles one-window mode;
+  Control + Option + Command + D toggles background dimming. Edit them in
+  Shortcuts, with clearer spacing between key symbols. Existing bindings remain.
+- **One-window mode:** automatically enables Stage Manager and Hide recent apps.
+  Disabling it or switching to dimming restores both earlier states, including
+  after a restart or failed restoration. Existing restore journals remain readable.
+- **Automatic status updates:** known preference changes from other apps and
+  system events trigger a complete status read without periodic polling. Saved
+  profiles and restore records remain unchanged by external edits. Changes
+  without a macOS notification appear on opening, activation or Refresh.
+
+## Verification
+
+150 automated checks passed locally on macOS 15.8.1 (Apple Silicon), including
+cross-process preference observation with isolated test data. Light and dark UI
+fixtures were inspected. Live system effects and shortcut delivery on other macOS
+versions and Intel Macs remain manual checks.
 
 ## Installation
 

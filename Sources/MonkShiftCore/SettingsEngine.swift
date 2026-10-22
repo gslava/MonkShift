@@ -8,7 +8,8 @@ import Foundation
     private var operationInProgress = false
     public var hasMonkSession: Bool { !journal.monk.isEmpty || journal.monkFocusBaseline != nil }
     public var hasIndividualChanges: Bool {
-        !journal.individual.isEmpty || (!hasMonkSession && journal.stageManagerBeforeOneWindow != nil)
+        !journal.individual.isEmpty || (!hasMonkSession &&
+            (journal.stageManagerBeforeOneWindow != nil || journal.hideRecentAppsBeforeOneWindow != nil))
     }
 
     public init(backend: SettingsBackend, store: RestoreStore) throws {
@@ -30,16 +31,25 @@ import Foundation
     public func set(_ feature: Feature, enabled: Bool, intensity: Double) async throws {
         try beginOperation()
         defer { operationInProgress = false }
+        try await setValue(feature, enabled: enabled, intensity: intensity)
+    }
+
+    private func setValue(_ feature: Feature, enabled: Bool, intensity: Double) async throws {
         var next = journal
         var affected = enabled ? [feature] + (feature.alternativeFocusMode.map { [$0] } ?? []) : [feature]
         if hasMonkSession && next.monkFocusBaseline == nil {
-            next.monkFocusBaseline = .init(stageManagerBeforeOneWindow: journal.stageManagerBeforeOneWindow)
+            next.monkFocusBaseline = .init(stageManagerBeforeOneWindow: journal.stageManagerBeforeOneWindow,
+                hideRecentAppsBeforeOneWindow: journal.hideRecentAppsBeforeOneWindow)
         }
         if feature == .oneWindowAtATime && enabled {
-            _ = try await stageManagerState()
-            affected.append(.stageManager)
+            _ = try await oneWindowPrerequisiteState(.stageManager)
+            _ = try await oneWindowPrerequisiteState(.hideRecentApps)
+            affected += [.stageManager, .hideRecentApps]
             if next.stageManagerBeforeOneWindow == nil {
                 next.stageManagerBeforeOneWindow = try await backend.snapshot(.stageManager)
+            }
+            if next.hideRecentAppsBeforeOneWindow == nil {
+                next.hideRecentAppsBeforeOneWindow = try await backend.snapshot(.hideRecentApps)
             }
         }
         for affectedFeature in affected where next.individual[affectedFeature.rawValue] == nil && next.monk[affectedFeature.rawValue] == nil {
@@ -51,13 +61,15 @@ import Foundation
                 let status = try await backend.read(feature)
                 guard status.available else { throw MonkError(status.detail ?? "This focus mode is unavailable.") }
                 if feature == .oneWindowAtATime {
-                    if try await stageManagerState().enabled != true {
-                        try await backend.apply(.stageManager, intensity: intensity)
+                    for prerequisite in [Feature.stageManager, .hideRecentApps] {
+                        if try await oneWindowPrerequisiteState(prerequisite).enabled != true {
+                            try await backend.apply(prerequisite, intensity: intensity)
+                        }
                     }
-                    try await requireStageManagerEnabled()
+                    try await requireOneWindowPrerequisites()
                 }
                 try await backend.disable(alternative)
-                if feature == .dimBackground { try await restoreStageManagerAfterOneWindow() }
+                if feature == .dimBackground { try await restoreOneWindowPrerequisites() }
             }
             try await backend.apply(feature, intensity: intensity)
         } else if let snapshot = journal.monk[feature.rawValue] ?? journal.individual[feature.rawValue] {
@@ -69,30 +81,79 @@ import Foundation
         } else {
             try await backend.disable(feature)
         }
-        if feature == .oneWindowAtATime && !enabled { try await restoreStageManagerAfterOneWindow() }
+        if feature == .oneWindowAtATime && !enabled { try await restoreOneWindowPrerequisites() }
     }
 
-    private func stageManagerState() async throws -> FeatureState {
-        let state = try await backend.read(.stageManager)
+    public func applyProfile(_ settings: ProfileSettings) async throws -> [OperationIssue] {
+        try settings.validate()
+        try beginOperation()
+        defer { operationInProgress = false }
+        let settings = settings.normalized
+        var next = journal
+        var targets = settings.values
+        if targets[.oneWindowAtATime] == true { targets[.dimBackground] = false }
+        if targets[.dimBackground] == true { targets[.oneWindowAtATime] = false }
+        // Capture the complete group before the first mutation, retaining any
+        // earlier individual or Monk baseline across every profile switch.
+        for feature in Feature.allCases where targets[feature] != nil {
+            if next.individual[feature.rawValue] == nil && next.monk[feature.rawValue] == nil {
+                next.individual[feature.rawValue] = try await backend.snapshot(feature)
+            }
+        }
+        try commit(next)
+        var issues: [OperationIssue] = []
+        let focus: [Feature] = settings.values[.oneWindowAtATime] == true ? [.oneWindowAtATime] :
+            settings.values[.dimBackground] == true ? [.dimBackground] : [.oneWindowAtATime, .dimBackground]
+        let order = focus + Feature.allCases.filter { $0.alternativeFocusMode == nil }
+        for feature in order {
+            guard let enabled = targets[feature] else { continue }
+            do {
+                let state = try await backend.read(feature)
+                // An unavailable disabled feature does not block other controls.
+                if !enabled && !state.available { continue }
+                guard state.available, let current = state.enabled else {
+                    throw MonkError(state.detail ?? "This setting is unavailable or unknown.")
+                }
+                // Active focus modes also reconcile their dependencies. A saved
+                // filter intensity must apply even if its checkbox is already on.
+                if current != enabled || (enabled && (feature.alternativeFocusMode != nil || feature == .grayscale)) ||
+                    (feature == .oneWindowAtATime && !enabled &&
+                        (journal.stageManagerBeforeOneWindow != nil || journal.hideRecentAppsBeforeOneWindow != nil)) {
+                    try await setValue(feature, enabled: enabled,
+                        intensity: feature == .dimBackground ? settings.dimmingIntensity : settings.intensity)
+                }
+            } catch { issues.append(OperationIssue(feature, error)) }
+        }
+        return issues
+    }
+
+    private func oneWindowPrerequisiteState(_ feature: Feature) async throws -> FeatureState {
+        let state = try await backend.read(feature)
         guard state.available, state.enabled != nil else {
-            throw MonkError(state.detail ?? "Stage Manager is unavailable or its state is unknown.")
+            throw MonkError(state.detail ?? "\(feature.title) is unavailable or its state is unknown.")
         }
         return state
     }
 
-    private func requireStageManagerEnabled() async throws {
-        guard try await stageManagerState().enabled == true else {
-            throw MonkError("Stage Manager could not be enabled. One-window mode was not changed.")
+    private func requireOneWindowPrerequisites() async throws {
+        for feature in [Feature.stageManager, .hideRecentApps] {
+            guard try await oneWindowPrerequisiteState(feature).enabled == true else {
+                throw MonkError("\(feature.title) could not be enabled. One-window mode was not changed.")
+            }
         }
     }
 
-    private func restoreStageManagerAfterOneWindow() async throws {
-        guard let snapshot = journal.stageManagerBeforeOneWindow else { return }
-        try await backend.restore(.stageManager, from: snapshot)
-        try await backend.finishChanges()
-        var next = journal
-        next.stageManagerBeforeOneWindow = nil
-        try commit(next)
+    private func restoreOneWindowPrerequisites() async throws {
+        for feature in [Feature.stageManager, .hideRecentApps] {
+            let snapshot = feature == .stageManager ? journal.stageManagerBeforeOneWindow : journal.hideRecentAppsBeforeOneWindow
+            guard let snapshot else { continue }
+            try await backend.restore(feature, from: snapshot)
+            try await backend.finishChanges()
+            var next = journal
+            if feature == .stageManager { next.stageManagerBeforeOneWindow = nil }
+            else { next.hideRecentAppsBeforeOneWindow = nil }
+            try commit(next)
+        }
     }
 
     public func enableMonk(intensity: Double, focusMode: Feature = .oneWindowAtATime,
@@ -114,15 +175,23 @@ import Foundation
             } catch { issues.append(OperationIssue(feature, error)) }
         }
         if !next.monk.isEmpty && next.monkFocusBaseline == nil {
-            next.monkFocusBaseline = .init(stageManagerBeforeOneWindow: journal.stageManagerBeforeOneWindow)
+            next.monkFocusBaseline = .init(stageManagerBeforeOneWindow: journal.stageManagerBeforeOneWindow,
+                hideRecentAppsBeforeOneWindow: journal.hideRecentAppsBeforeOneWindow)
         }
-        if selected == .oneWindowAtATime && next.stageManagerBeforeOneWindow == nil {
+        if selected == .oneWindowAtATime {
             do {
-                guard next.monk[Feature.stageManager.rawValue] != nil else {
-                    throw MonkError("Could not save Stage Manager. One-window mode was not changed.")
+                for feature in [Feature.stageManager, .hideRecentApps] {
+                    guard next.monk[feature.rawValue] != nil else {
+                        throw MonkError("Could not save \(feature.title). One-window mode was not changed.")
+                    }
+                    _ = try await oneWindowPrerequisiteState(feature)
                 }
-                _ = try await stageManagerState()
-                next.stageManagerBeforeOneWindow = try await backend.snapshot(.stageManager)
+                if next.stageManagerBeforeOneWindow == nil {
+                    next.stageManagerBeforeOneWindow = try await backend.snapshot(.stageManager)
+                }
+                if next.hideRecentAppsBeforeOneWindow == nil {
+                    next.hideRecentAppsBeforeOneWindow = try await backend.snapshot(.hideRecentApps)
+                }
             } catch { issues.append(OperationIssue(.oneWindowAtATime, error)) }
         }
         try commit(next)
@@ -136,13 +205,13 @@ import Foundation
                         throw MonkError("Could not save the other focus mode. Neither mode was changed.")
                     }
                     if feature == .oneWindowAtATime {
-                        guard !issues.contains(where: { $0.feature == .stageManager || $0.feature == .oneWindowAtATime }) else {
-                            throw MonkError("Stage Manager could not be enabled. One-window mode was not changed.")
+                        guard !issues.contains(where: { $0.feature == .stageManager || $0.feature == .hideRecentApps || $0.feature == .oneWindowAtATime }) else {
+                            throw MonkError("Stage Manager and Hide recent apps must be enabled before one-window mode.")
                         }
-                        try await requireStageManagerEnabled()
+                        try await requireOneWindowPrerequisites()
                     }
                     try await backend.disable(alternative)
-                    if feature == .dimBackground { try await restoreStageManagerAfterOneWindow() }
+                    if feature == .dimBackground { try await restoreOneWindowPrerequisites() }
                 }
                 try await backend.apply(feature, intensity: feature == .dimBackground ? dimmingIntensity : intensity)
             }
@@ -180,6 +249,7 @@ import Foundation
                 else {
                     next.individual.removeValue(forKey: feature.rawValue)
                     if feature == .stageManager { next.stageManagerBeforeOneWindow = nil }
+                    if feature == .hideRecentApps { next.hideRecentAppsBeforeOneWindow = nil }
                 }
                 try commit(next)
             } catch { issues.append(OperationIssue(feature, error)) }
@@ -187,12 +257,13 @@ import Foundation
         if monk && journal.monk.isEmpty, let baseline = journal.monkFocusBaseline {
             var next = journal
             next.stageManagerBeforeOneWindow = baseline.stageManagerBeforeOneWindow
+            next.hideRecentAppsBeforeOneWindow = baseline.hideRecentAppsBeforeOneWindow
             next.monkFocusBaseline = nil
             do { try commit(next) }
             catch { issues.append(OperationIssue(.oneWindowAtATime, error)) }
         } else if !monk && journal.individual.isEmpty && !hasMonkSession {
-            do { try await restoreStageManagerAfterOneWindow() }
-            catch { issues.append(OperationIssue(.stageManager, error)) }
+            do { try await restoreOneWindowPrerequisites() }
+            catch { issues.append(OperationIssue(journal.stageManagerBeforeOneWindow != nil ? .stageManager : .hideRecentApps, error)) }
         }
         return issues
     }

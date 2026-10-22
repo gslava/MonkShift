@@ -30,7 +30,20 @@ import Foundation
     @MainActor static func main() async {
         let suite = SettingsEngineTests()
         let summary = FeatureSummaryTests()
+        let profiles = ProfileTests()
         let tests: [(String, () async throws -> Void)] = [
+            ("Profiles copy settings and survive restart with validated names", profiles.testLibraryRoundTripAndNames),
+            ("Invalid profiles preserve the existing file", profiles.testInvalidLibrariesPreserveFiles),
+            ("Profile switches save all baselines before the first mutation", profiles.testSwitchesSaveEveryBaselineBeforeMutation),
+            ("Profile snapshot and disk failures prevent mutations", profiles.testSnapshotAndDiskFailureBlockProfileMutation),
+            ("Failed profile application restores after restart", profiles.testProfileFailuresRemainRecoverableAfterRestart),
+            ("Profile switches preserve a surrounding Monk baseline", profiles.testProfileWithinMonkPreservesSessionBaseline),
+            ("Profile operations reject interleaved changes", profiles.testProfileOperationsRejectInterleaving),
+            ("One-window mode restores Stage Manager and recent apps for each cycle", suite.testOneWindowRestoresBothPrerequisitesForEachCycle),
+            ("Recent apps prerequisite failures preserve the other mode", suite.testRecentAppsPrerequisiteFailuresPreserveOtherMode),
+            ("Recent apps restoration survives restart and retries", suite.testRecentAppsRestoreFailureSurvivesRestart),
+            ("Monk sessions preserve the recent apps focus baseline", suite.testMonkPreservesRecentAppsFocusBaseline),
+            ("Monk recent apps failures preserve the other mode", suite.testMonkRecentAppsFailuresPreserveOtherMode),
             ("One-window mode restores Stage Manager for each cycle", suite.testOneWindowRestoresStageManagerForEachCycle),
             ("Switching to dimming restores Stage Manager first", suite.testDimmingSwitchRestoresStageManager),
             ("Stage Manager prerequisite failures preserve the other mode", suite.testStageManagerPrerequisiteFailuresPreserveOtherMode),

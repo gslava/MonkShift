@@ -3,7 +3,7 @@ import Carbon
 import MonkShiftCore
 
 enum ShortcutAction: UInt32, CaseIterable, Identifiable, Codable {
-    case monk = 1, stage, grayscale, menuBar
+    case monk = 1, stage, grayscale, menuBar, oneWindow, dimming
     var id: UInt32 { rawValue }
     var title: String {
         switch self {
@@ -11,13 +11,21 @@ enum ShortcutAction: UInt32, CaseIterable, Identifiable, Codable {
         case .stage: return "Stage Manager"
         case .grayscale: return "Color Filter"
         case .menuBar: return "Hide / show menu bar"
+        case .oneWindow: return "Show windows one at a time"
+        case .dimming: return "Dim background windows"
         }
     }
     var defaultKey: String {
-        switch self { case .monk: return "M"; case .stage: return "S"; case .grayscale: return "C"; case .menuBar: return "B" }
+        switch self {
+        case .monk: return "M"; case .stage: return "S"; case .grayscale: return "C"; case .menuBar: return "B"
+        case .oneWindow: return "W"; case .dimming: return "D"
+        }
     }
     var feature: Feature? {
-        switch self { case .monk: return nil; case .stage: return .stageManager; case .grayscale: return .grayscale; case .menuBar: return .hideMenuBar }
+        switch self {
+        case .monk: return nil; case .stage: return .stageManager; case .grayscale: return .grayscale; case .menuBar: return .hideMenuBar
+        case .oneWindow: return .oneWindowAtATime; case .dimming: return .dimBackground
+        }
     }
 }
 
@@ -48,12 +56,21 @@ struct Shortcut: Codable, Equatable {
     private var references: [ShortcutAction: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
     private var active = false
+    private let defaults: UserDefaults
 
-    init(installHandler: Bool = true) {
-        let saved = UserDefaults.standard.data(forKey: "shortcuts")
+    init(installHandler: Bool = true, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let saved = defaults.data(forKey: "shortcuts")
             .flatMap { try? JSONDecoder().decode([String: Shortcut].self, from: $0) } ?? [:]
         for action in ShortcutAction.allCases {
-            shortcuts[action] = saved[String(action.rawValue)] ?? Shortcut(key: action.defaultKey)
+            var shortcut = saved[String(action.rawValue)] ?? Shortcut(key: action.defaultKey)
+            if saved[String(action.rawValue)] == nil && (action == .oneWindow || action == .dimming) {
+                // A new default must not invalidate an existing custom binding.
+                let candidates = [Shortcut(key: action.defaultKey), Shortcut(key: action.defaultKey, shift: true)] +
+                    Shortcut.keys.map { Shortcut(key: $0.0) }
+                shortcut = candidates.first { !shortcuts.values.contains($0) && !saved.values.contains($0) } ?? shortcut
+            }
+            shortcuts[action] = shortcut
         }
         guard installHandler else { return }
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
@@ -112,7 +129,7 @@ struct Shortcut: Codable, Equatable {
             if shortcut != shortcuts[action] || references[action] == nil { try register(shortcut, for: action) }
             shortcuts[action] = shortcut
             let values = shortcuts.reduce(into: [String: Shortcut]()) { $0[String($1.key.rawValue)] = $1.value }
-            UserDefaults.standard.set(try JSONEncoder().encode(values), forKey: "shortcuts")
+            defaults.set(try JSONEncoder().encode(values), forKey: "shortcuts")
             errors.removeValue(forKey: action)
         } catch { errors[action] = error.localizedDescription }
     }

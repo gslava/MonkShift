@@ -102,9 +102,9 @@ After publication, verify the public download and checksum and test installation
 on a separate Mac. Shortcuts registration and Gatekeeper first-launch behavior
 remain live verification steps.
 
-For version `0.1.3`, download names are `MonkShift-0.1.3-universal.dmg` and
-`MonkShift-0.1.3-universal.zip`, under
-`https://github.com/gslava/MonkShift/releases/download/v0.1.3/` once published.
+For version `0.1.4`, download names are `MonkShift-0.1.4-universal.dmg` and
+`MonkShift-0.1.4-universal.zip`, under
+`https://github.com/gslava/MonkShift/releases/download/v0.1.4/` once published.
 
 ## Homebrew custom tap
 

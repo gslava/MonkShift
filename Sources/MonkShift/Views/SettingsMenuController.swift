@@ -10,6 +10,7 @@ import MonkShiftCore
     private var items: [String: NSMenuItem] = [:]
     private var intensityView: GrayscaleIntensityMenuView?
     private var dimmingIntensityView: GrayscaleIntensityMenuView?
+    private let profileMenu = NSMenu()
 
     init(model: AppModel, showWindow: @escaping () -> Void, quit: @escaping () -> Void) {
         self.model = model
@@ -17,6 +18,7 @@ import MonkShiftCore
         self.quit = quit
         super.init()
         menu.autoenablesItems = false
+        profileMenu.autoenablesItems = false
         update()
     }
 
@@ -30,6 +32,7 @@ import MonkShiftCore
         }
         rows.append(separator("headerSeparator"))
         if model.permissions.granted {
+            rows.append(profilesControl())
             let monk = item("monk", model.displayedHasSession ? "Disable Monk Mode — Restore Previous" : "Monk Mode (Enable Selected Settings)", #selector(toggleMonk))
             monk.isEnabled = model.canChange
             rows.append(monk)
@@ -66,12 +69,35 @@ import MonkShiftCore
 
         // Reconcile only structural changes (permission, restore/error rows).
         // Ordinary refreshes merely change existing titles/checkmarks/values.
+        reconcile(rows, in: menu)
+    }
+
+    private func reconcile(_ rows: [NSMenuItem], in target: NSMenu) {
         let retained = Set(rows.map(ObjectIdentifier.init))
-        for row in menu.items where !retained.contains(ObjectIdentifier(row)) { menu.removeItem(row) }
-        for (index, row) in rows.enumerated() where menu.index(of: row) != index {
-            if row.menu === menu { menu.removeItem(row) }
-            menu.insertItem(row, at: index)
+        for row in target.items where !retained.contains(ObjectIdentifier(row)) { target.removeItem(row) }
+        for (index, row) in rows.enumerated() where target.index(of: row) != index {
+            if row.menu === target { target.removeItem(row) }
+            target.insertItem(row, at: index)
         }
+    }
+
+    private func profilesControl() -> NSMenuItem {
+        let row = item("profiles", "Profile: \(model.selectedProfileName)")
+        row.isEnabled = model.canSelectProfile
+        if row.submenu !== profileMenu { row.submenu = profileMenu }
+        var rows = model.profiles.map { profile in
+            let choice = item("profile-\(profile.id)", profile.name, #selector(selectProfile(_:)))
+            choice.representedObject = profile.id
+            choice.state = profile.id == model.selectedProfileID ? .on : .off
+            choice.isEnabled = model.canSelectProfile
+            return choice
+        }
+        rows.append(separator("profilesSeparator"))
+        let create = item("newProfile", "New Profile…", #selector(newProfile))
+        create.isEnabled = model.canCreateProfile
+        rows.append(create)
+        reconcile(rows, in: profileMenu)
+        return row
     }
 
     private func item(_ id: String, _ title: String, _ action: Selector? = nil) -> NSMenuItem {
@@ -148,4 +174,9 @@ import MonkShiftCore
     @objc private func restoreAll() { model.restoreAll() }
     @objc private func quitApp() { quit() }
     @objc private func requestAccessibility() { showWindow(); model.accessibility.request() }
+    @objc private func selectProfile(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        model.selectProfile(id: id)
+    }
+    @objc private func newProfile() { showWindow(); model.showNewProfile = true }
 }

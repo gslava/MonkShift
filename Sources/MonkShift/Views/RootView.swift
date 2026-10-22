@@ -76,6 +76,7 @@ struct ControlsView: View {
                 HStack {
                     Text("MonkShift").font(.title2.weight(.semibold))
                     Spacer()
+                    ProfilePicker(model: model)
                     Button("Refresh", systemImage: "arrow.clockwise") { model.refresh() }
                         .labelStyle(.iconOnly).help("Read current macOS settings")
                 }
@@ -141,6 +142,7 @@ struct ControlsView: View {
                                 ScrollView {
                                     VStack(alignment: .leading, spacing: 12) {
                                         if let error = model.generalError { Text(error) }
+                                        if let error = model.profileError { Text(error) }
                                         ForEach(model.issues) { issue in
                                             VStack(alignment: .leading, spacing: 4) {
                                                 Text(issue.feature.title).fontWeight(.medium)
@@ -176,6 +178,7 @@ struct ControlsView: View {
             }
             .padding(24).frame(width: 500)
         }
+        .sheet(isPresented: $model.showNewProfile) { NewProfileView(model: model) }
     }
 }
 

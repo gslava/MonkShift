@@ -12,6 +12,12 @@ import SwiftUI
         for dark in [false, true] {
             let scheme: ColorScheme = dark ? .dark : .light
             let theme = dark ? "dark" : "light"
+            let shortcutManager = ShortcutManager(installHandler: false)
+            try render(ShortcutList(manager: shortcutManager).padding(24).environment(\.colorScheme, scheme),
+                name: "shortcuts-\(theme)", output: output, dark: dark, size: NSSize(width: 560, height: 340))
+            try render(ShortcutEditor(action: .monk, manager: shortcutManager).environment(\.colorScheme, scheme),
+                name: "shortcut-editor-\(theme)", output: output, dark: dark, size: NSSize(width: 548, height: 250))
+            shortcutManager.shutdown()
             for state in AppModel.PreviewState.allCases {
                 let model = AppModel.preview(directory: FileManager.default.temporaryDirectory.appendingPathComponent("MonkShiftPreview-\(UUID().uuidString)"), state: state)
                 let name = state == .off ? "controls-\(theme)" : "controls-\(state.rawValue)-\(theme)"
@@ -25,6 +31,13 @@ import SwiftUI
                 if state == .unavailable {
                     try render(ControlsView(model: model).environment(\.colorScheme, scheme),
                         name: "controls-minimum-\(theme)", output: output, dark: dark, size: ControlsLayout.size)
+                }
+                if state == .off {
+                    try model.createProfile(name: "Reading")
+                    try render(ControlsView(model: model).environment(\.colorScheme, scheme),
+                        name: "controls-profile-\(theme)", output: output, dark: dark)
+                    try render(NewProfileView(model: model).environment(\.colorScheme, scheme),
+                        name: "new-profile-\(theme)", output: output, dark: dark, size: NSSize(width: 428, height: 240))
                 }
                 model.shortcuts.shutdown()
             }

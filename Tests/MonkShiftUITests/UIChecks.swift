@@ -38,11 +38,13 @@ private func require(_ condition: Bool, _ message: String) throws {
     var blockedRead: CheckedContinuation<Void, Never>?
     var blockedApply: CheckedContinuation<Void, Never>?
     var blockedIntensity: CheckedContinuation<Void, Never>?
+    var reads = 0
     let directory: URL
 
     init(directory: URL) { self.directory = directory }
 
     func read(_ feature: Feature) async throws -> FeatureState {
+        reads += 1
         if holdRead {
             holdRead = false
             await withCheckedContinuation { blockedRead = $0 }
@@ -86,6 +88,16 @@ private func require(_ condition: Bool, _ message: String) throws {
     func releaseIntensity() { blockedIntensity?.resume(); blockedIntensity = nil }
 }
 
+@MainActor private final class FakeProfileStore: ProfileStore {
+    var library: ProfileLibrary?
+    var failSave = false
+    func load() throws -> ProfileLibrary? { library }
+    func save(_ library: ProfileLibrary) throws {
+        if failSave { throw MonkError("Fixture profile storage failed") }
+        self.library = library
+    }
+}
+
 @MainActor private final class Fixture {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MonkShiftUI-\(UUID().uuidString)")
     let permission = FakePermission()
@@ -93,14 +105,17 @@ private func require(_ condition: Bool, _ message: String) throws {
     let backend: FakeSettings
     let model: AppModel
     private let defaults: UserDefaults
+    private let profileStore: ProfileStore?
     private let suite = "MonkShiftUIChecks.\(UUID().uuidString)"
 
-    init() {
+    init(profileStore: ProfileStore? = nil) {
+        self.profileStore = profileStore
         backend = FakeSettings(directory: directory)
         defaults = UserDefaults(suiteName: suite)!
         model = AppModel(directory: directory, backend: backend,
-            permissions: PermissionManager(client: permission), shortcuts: ShortcutManager(installHandler: false),
+            permissions: PermissionManager(client: permission), shortcuts: ShortcutManager(installHandler: false, defaults: defaults),
             accessibility: AccessibilityPermissionManager(client: accessibility),
+            profileStore: profileStore,
             defaults: defaults)
     }
     func start() async throws {
@@ -110,7 +125,8 @@ private func require(_ condition: Bool, _ message: String) throws {
     }
     func restartedModel() -> AppModel {
         AppModel(directory: directory, backend: backend, permissions: PermissionManager(client: permission),
-            shortcuts: ShortcutManager(installHandler: false), accessibility: AccessibilityPermissionManager(client: accessibility),
+            shortcuts: ShortcutManager(installHandler: false, defaults: defaults), accessibility: AccessibilityPermissionManager(client: accessibility),
+            profileStore: profileStore,
             defaults: defaults)
     }
     func close() {
@@ -118,6 +134,7 @@ private func require(_ condition: Bool, _ message: String) throws {
         backend.releaseApply()
         backend.releaseIntensity()
         model.shortcuts.shutdown()
+        model.shutdown()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: directory)
     }
@@ -133,9 +150,30 @@ private func require(_ condition: Bool, _ message: String) throws {
 
 @main enum UIChecks {
     @MainActor static func main() async {
+        let arguments = CommandLine.arguments
+        if arguments.count == 4 && arguments[1] == "--write-observed-preference" {
+            guard arguments[2].hasPrefix("MonkShiftObserverChecks."), arguments[3] == "watched" else { exit(2) }
+            CFPreferencesSetAppValue(arguments[3] as CFString, kCFBooleanTrue, arguments[2] as CFString)
+            exit(CFPreferencesAppSynchronize(arguments[2] as CFString) ? 0 : 1)
+        }
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
         let checks: [(String, @MainActor () async throws -> Void)] = [
+            ("Preference observation detects changes and stops cleanly", testPreferenceObservation),
+            ("Preference observation receives another process's changes", testExternalProcessPreferenceObservation),
+            ("System events update settings and gate hidden app-switch reads", testSettingsNotifications),
+            ("External refresh coalesces all settings without changing profiles or restore records", testExternalRefreshReadOnly),
+            ("Events during reads remain pending", testExternalRefreshDuringRead),
+            ("Events during mutations preserve the queue and profile intent", testExternalRefreshDuringMutation),
+            ("External refresh waits for both slider editors", testExternalRefreshDuringSlider),
+            ("Quit cancels pending external refresh", testExternalRefreshQuit),
+            ("Default captures current settings without changing macOS", testDefaultProfileMigration),
+            ("Profiles autosave, switch through the menu and retain Restore All", testProfileLifecycle),
+            ("Rapid profile switches preserve their profile identity", testRapidProfileSwitches),
+            ("Profile storage failure prevents selection and preserves existing data", testProfileStorageFailure),
+            ("Corrupt profiles preserve restoration and are not replaced", testCorruptProfiles),
+            ("Denied profile dimming preserves the current mode and retries", testProfileAccessibilityRevocation),
+            ("New focus shortcuts preserve legacy bindings and route through the queue", testFocusShortcuts),
             ("Focus handoff retains the layer until its new anchor is ready", DimmingChecks.testFocusHandoffKeepsTheLayerVisible),
             ("Menus retain the layer and allow new window focus", DimmingChecks.testMenuKeepsLayerAndAcceptsNewWindow),
             ("Slow AX menu replies without notifications retain the visible anchor", DimmingChecks.testMenuWithoutNotificationsRetainsVisibleWindow),
@@ -203,6 +241,355 @@ private func require(_ condition: Bool, _ message: String) throws {
         if failures > 0 { exit(1) }
     }
 
+    @MainActor private static func testPreferenceObservation() async throws {
+        let suite = "MonkShiftObserverChecks.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "watched")
+        var changes = 0
+        let observer = SystemSettingsObserver(preferences: [(defaults, ["watched"])],
+            workspaceCenter: NotificationCenter(), applicationCenter: NotificationCenter(), onChange: { changes += 1 })
+        defer { observer.stop() }
+        defaults.set(true, forKey: "watched")
+        try await until { changes == 1 }
+        defaults.set(true, forKey: "unrelated")
+        try await Task.sleep(for: .milliseconds(40))
+        try require(changes == 1, "An unrelated preference triggered a read")
+        observer.stop()
+        observer.stop()
+        defaults.set(false, forKey: "watched")
+        try await Task.sleep(for: .milliseconds(40))
+        try require(changes == 1, "Stopped preference observation still delivered changes")
+    }
+
+    @MainActor private static func testExternalProcessPreferenceObservation() async throws {
+        let suite = "MonkShiftObserverChecks.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "watched")
+        var changed = false
+        let observer = SystemSettingsObserver(preferences: [(defaults, ["watched"])],
+            workspaceCenter: NotificationCenter(), applicationCenter: NotificationCenter(), onChange: { changed = true })
+        defer { observer.stop() }
+        let writer = Process()
+        writer.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        writer.arguments = ["--write-observed-preference", suite, "watched"]
+        try writer.run()
+        try await until { !writer.isRunning }
+        try require(writer.terminationStatus == 0, "The isolated preference writer failed")
+        try await until { changed }
+        try require(defaults.bool(forKey: "watched"), "The external preference value was not retained")
+    }
+
+    @MainActor private static func testSettingsNotifications() async throws {
+        let workspace = NotificationCenter(), application = NotificationCenter()
+        var visible = false, changes = 0
+        let observer = SystemSettingsObserver(preferences: [], workspaceCenter: workspace, applicationCenter: application,
+            isInterfaceVisible: { visible }, onChange: { changes += 1 })
+        defer { observer.stop() }
+        for name in [NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, NSWorkspace.activeSpaceDidChangeNotification,
+            NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            let before = changes
+            workspace.post(name: name, object: nil)
+            try await until { changes == before + 1 }
+        }
+        let before = changes
+        workspace.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(30))
+        try require(changes == before, "Hidden app switches triggered full settings reads")
+        visible = true
+        workspace.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        try await until { changes == before + 1 }
+        application.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        try await until { changes == before + 2 }
+        observer.stop()
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(30))
+        try require(changes == before + 2, "Stopped system notification observation still delivered changes")
+    }
+
+    @MainActor private static func testExternalRefreshReadOnly() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        let profilesURL = f.directory.appendingPathComponent("profiles.json")
+        let profiles = try Data(contentsOf: profilesURL)
+        let before = f.backend.reads
+        for feature in Feature.allCases { f.backend.values[feature] = feature != .oneWindowAtATime }
+        f.backend.amount = 0.82
+        f.backend.dimmingAmount = 0.63
+        for _ in 0..<30 { f.model.requestExternalRefresh() }
+        try await until { f.model.states[.stageManager]?.enabled == true && !f.model.refreshing }
+        for feature in Feature.allCases {
+            try require(f.model.states[feature]?.enabled == f.backend.values[feature], "External refresh missed \(feature.rawValue)")
+        }
+        try require(f.model.intensity == 0.82 && f.model.dimmingIntensity == 0.63 && f.backend.reads == before + Feature.allCases.count,
+            "An event burst did not coalesce to one complete read with both intensities")
+        try await Task.sleep(for: .milliseconds(350))
+        let preserved = try Data(contentsOf: profilesURL)
+        try require(f.backend.reads == before + Feature.allCases.count && f.backend.changes.isEmpty && preserved == profiles &&
+            !FileManager.default.fileExists(atPath: f.directory.appendingPathComponent("restore.json").path),
+            "External observation polled repeatedly, mutated settings or created restore records")
+        f.model.set(.hideDock, enabled: false)
+        try await until { !f.model.busy }
+        let restoreURL = f.directory.appendingPathComponent("restore.json")
+        let baseline = try Data(contentsOf: restoreURL)
+        let preset = try Data(contentsOf: profilesURL)
+        f.backend.values[.hideDock] = true
+        f.model.requestExternalRefresh()
+        try await until { f.model.states[.hideDock]?.enabled == true && !f.model.refreshing }
+        let restoreAfter = try Data(contentsOf: restoreURL)
+        let presetAfter = try Data(contentsOf: profilesURL)
+        try require(restoreAfter == baseline && presetAfter == preset, "An external edit replaced saved baselines or profile settings")
+    }
+
+    @MainActor private static func testExternalRefreshDuringRead() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        let before = f.backend.reads
+        f.backend.holdRead = true
+        f.model.refresh()
+        try await until { f.backend.blockedRead != nil }
+        f.model.requestExternalRefresh()
+        f.backend.releaseRead()
+        try await until { !f.model.refreshing && f.backend.reads >= before + 2 * Feature.allCases.count }
+    }
+
+    @MainActor private static func testExternalRefreshDuringMutation() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.backend.holdApply = true
+        f.model.set(.hideDock, enabled: true)
+        try await until { f.backend.blockedApply != nil }
+        f.backend.values[.stageManager] = true
+        f.model.requestExternalRefresh()
+        f.model.set(.hideMenuBar, enabled: true)
+        f.backend.releaseApply()
+        try await until { !f.model.busy && f.model.states[.stageManager]?.enabled == true }
+        try require(f.backend.changes == ["apply:hideDock", "apply:hideMenuBar"] &&
+            f.model.profiles[0].settings.values[.stageManager] == false,
+            "External status updates disturbed queued changes or autosaved an external setting")
+    }
+
+    @MainActor private static func testExternalRefreshDuringSlider() async throws {
+        for dimming in [false, true] {
+            let f = Fixture(); defer { f.close() }
+            try await f.start()
+            let before = f.backend.reads
+            if dimming { f.model.isEditingDimmingIntensity = true }
+            else { f.model.isEditingIntensity = true }
+            f.backend.values[.stageManager] = true
+            f.model.requestExternalRefresh()
+            try await Task.sleep(for: .milliseconds(300))
+            try require(f.backend.reads == before, "A status read interrupted slider editing")
+            if dimming { f.model.isEditingDimmingIntensity = false }
+            else { f.model.isEditingIntensity = false }
+            try await until { f.model.states[.stageManager]?.enabled == true && !f.model.refreshing }
+        }
+    }
+
+    @MainActor private static func testExternalRefreshQuit() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        let before = f.backend.reads
+        f.model.requestExternalRefresh()
+        try require(!f.model.prepareToQuit(onReady: {}), "Idle Quit unnecessarily waited for an external read")
+        f.model.requestExternalRefresh()
+        try await Task.sleep(for: .milliseconds(350))
+        try require(f.backend.reads == before, "A pending external refresh survived Quit")
+    }
+
+    @MainActor private static func testDefaultProfileMigration() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.values[.hideMenuBar] = true
+        f.backend.values[.grayscale] = true
+        f.backend.amount = 0.73
+        try await f.start()
+        try require(f.model.profiles.count == 1 && f.model.selectedProfileName == "Default", "Default was not created")
+        let settings = f.model.profiles[0].settings
+        try require(settings.values[.hideMenuBar] == true && settings.values[.grayscale] == true && settings.intensity == 0.73,
+            "Default did not capture current settings and intensity")
+        try require(f.backend.changes.isEmpty, "Initializing Default changed system settings")
+    }
+
+    @MainActor private static func testProfileLifecycle() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.model.set(.hideDock, enabled: true)
+        try await until { !f.model.busy }
+        try f.model.createProfile(name: "Reading")
+        let readingID = f.model.selectedProfileID
+        try require(f.model.profiles[1].settings == f.model.profiles[0].settings, "A new profile did not copy the active settings")
+        f.model.set(.hideDock, enabled: false)
+        f.model.set(.dimBackground, enabled: true)
+        try await until { !f.model.busy }
+        f.model.dimmingIntensity = 0.7
+        f.model.commitDimmingIntensity()
+        try await until { !f.model.busy }
+        f.model.selectProfile(id: "default")
+        try await until { !f.model.busy }
+        try require(f.backend.values[.hideDock] == true && f.backend.values[.dimBackground] == false, "Default was not applied immediately")
+        let controller = SettingsMenuController(model: f.model, showWindow: {}, quit: {})
+        f.model.onRefresh = { [weak controller] in controller?.update() }
+        guard let submenu = controller.menu.items.first(where: { $0.title == "Profile: Default" })?.submenu,
+              let reading = submenu.items.first(where: { $0.representedObject as? String == readingID }),
+              let action = reading.action else { throw UIFailure(description: "Profile submenu is missing") }
+        try require(NSApp.sendAction(action, to: reading.target, from: reading), "Profile menu action was not handled")
+        try await until { !f.model.busy }
+        try require(reading.state == .on && f.model.selectedProfileID == readingID && f.backend.values[.hideDock] == false &&
+            f.backend.values[.dimBackground] == true && f.backend.dimmingAmount == 0.7, "Menu profile selection did not apply saved settings")
+        let savedProfiles = f.model.profiles
+        f.model.restoreAll()
+        try await until { !f.model.busy }
+        try require(f.backend.values.values.allSatisfy { !$0 } && f.model.profiles == savedProfiles, "Restore All lost the original baseline or erased presets")
+        let count = f.backend.changes.count
+        let restarted = f.restartedModel()
+        defer { restarted.shortcuts.shutdown(); restarted.shutdown() }
+        restarted.refresh()
+        try await until { !restarted.refreshing }
+        try require(restarted.selectedProfileID == readingID && restarted.profiles == savedProfiles && f.backend.changes.count == count,
+            "Restart lost profiles, selection, or silently changed system settings")
+        guard let create = submenu.items.first(where: { $0.title == "New Profile…" }), let createAction = create.action else {
+            throw UIFailure(description: "New Profile menu action is missing")
+        }
+        try require(NSApp.sendAction(createAction, to: create.target, from: create) && f.model.showNewProfile, "Menu did not open profile creation")
+    }
+
+    @MainActor private static func testRapidProfileSwitches() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.model.set(.hideDock, enabled: true)
+        try await until { !f.model.busy }
+        try f.model.createProfile(name: "Reading")
+        let readingID = f.model.selectedProfileID
+        f.model.set(.hideDock, enabled: false)
+        f.model.set(.grayscale, enabled: true)
+        try await until { !f.model.busy }
+        f.model.intensity = 0.8
+        f.model.commitIntensity()
+        try await until { !f.model.busy }
+        f.backend.holdApply = true
+        f.model.selectProfile(id: "default")
+        try await until { f.backend.blockedApply != nil }
+        f.model.selectProfile(id: readingID)
+        f.model.set(.grayscale, enabled: false)
+        f.model.selectProfile(id: "default")
+        f.backend.releaseApply()
+        try await until { !f.model.busy }
+        let reading = f.model.profiles.first { $0.id == readingID }!.settings
+        let original = f.model.profiles.first { $0.id == "default" }!.settings
+        try require(f.model.selectedProfileID == "default" && f.backend.values[.hideDock] == true && f.backend.values[.grayscale] == false,
+            "Rapid switches ended with the wrong settings")
+        try require(reading.values[.hideDock] == false && reading.values[.grayscale] == false && reading.intensity == 0.8 &&
+            original.values[.hideDock] == true && original.intensity == 0.5 && f.model.intensity == 0.5,
+            "Queued edits or intensity read-back overwrote another profile")
+        f.backend.holdApply = true
+        f.model.set(.grayscale, enabled: true)
+        try await until { f.backend.blockedApply != nil }
+        f.model.selectProfile(id: readingID)
+        f.model.selectProfile(id: "default")
+        f.backend.releaseApply()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.grayscale] == true && f.model.profiles[0].settings.values[.grayscale] == true,
+            "A queued return to the edited profile applied a stale copy")
+    }
+
+    @MainActor private static func testProfileStorageFailure() async throws {
+        let store = FakeProfileStore()
+        let f = Fixture(profileStore: store); defer { f.close() }
+        try await f.start()
+        try f.model.createProfile(name: "Reading")
+        let before = f.model.profileLibrary
+        store.failSave = true
+        f.model.selectProfile(id: "default")
+        try require(f.model.profileLibrary == before && f.backend.changes.isEmpty && f.model.profileError != nil,
+            "Failed persistence changed selection or system settings")
+        do { try f.model.createProfile(name: "Work"); throw UIFailure(description: "Failed creation succeeded") }
+        catch is MonkError { }
+        try require(f.model.profileLibrary == before, "Failed creation changed profiles")
+        store.failSave = false
+        f.model.selectProfile(id: "default")
+        try await until { !f.model.busy }
+        try require(f.model.selectedProfileID == "default" && f.model.profileError == nil, "Profile persistence could not be retried")
+        store.failSave = true
+        f.model.set(.hideDock, enabled: true)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.hideDock] == true && f.model.profileError != nil &&
+            f.model.profiles[0].settings.values[.hideDock] == false, "Failed autosave silently replaced the saved profile")
+        f.model.restoreAll()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.hideDock] == false, "Profile autosave failure blocked Restore All")
+    }
+
+    @MainActor private static func testCorruptProfiles() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.model.set(.hideDock, enabled: true)
+        try await until { !f.model.busy }
+        let url = f.directory.appendingPathComponent("profiles.json")
+        let corrupt = Data("keep this invalid profile data".utf8)
+        try corrupt.write(to: url)
+        let restarted = f.restartedModel()
+        defer { restarted.shortcuts.shutdown(); restarted.shutdown() }
+        restarted.refresh()
+        try await until { !restarted.refreshing }
+        try require(restarted.profileError != nil && !restarted.canSelectProfile, "Corrupt profiles were accepted")
+        restarted.restoreAll()
+        try await until { !restarted.busy }
+        let preserved = try Data(contentsOf: url)
+        try require(f.backend.values[.hideDock] == false && preserved == corrupt, "Corrupt profiles blocked restoration or were overwritten")
+    }
+
+    @MainActor private static func testFocusShortcuts() async throws {
+        let suite = "MonkShiftShortcutMigration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let original = Shortcut(key: "W")
+        defaults.set(try JSONEncoder().encode(["1": original]), forKey: "shortcuts")
+        let shortcuts = ShortcutManager(installHandler: false, defaults: defaults)
+        defer { shortcuts.shutdown() }
+        try require(shortcuts.shortcuts[.monk] == original && shortcuts.shortcuts[.oneWindow] != original &&
+            ShortcutAction.monk.rawValue == 1 && ShortcutAction.menuBar.rawValue == 4 &&
+            ShortcutAction.oneWindow.feature == .oneWindowAtATime && ShortcutAction.dimming.feature == .dimBackground,
+            "New shortcuts invalidated a legacy binding or action identity")
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.model.shortcuts.onAction?(.oneWindow)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.oneWindowAtATime] == true && f.backend.values[.stageManager] == true &&
+            f.backend.values[.hideRecentApps] == true, "One-window shortcut bypassed its dependencies")
+        f.model.shortcuts.onAction?(.dimming)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.dimBackground] == true && f.backend.values[.oneWindowAtATime] == false &&
+            f.backend.values[.stageManager] == false, "Dimming shortcut did not switch focus modes")
+        f.model.shortcuts.onAction?(.dimming)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.dimBackground] == false, "Focus shortcut did not toggle off")
+    }
+
+    @MainActor private static func testProfileAccessibilityRevocation() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        try f.model.createProfile(name: "Reading")
+        let readingID = f.model.selectedProfileID
+        f.model.set(.dimBackground, enabled: true)
+        try await until { !f.model.busy }
+        f.model.selectProfile(id: "default")
+        try await until { !f.model.busy }
+        f.model.set(.oneWindowAtATime, enabled: true)
+        try await until { !f.model.busy }
+        let count = f.backend.changes.count
+        f.accessibility.allowed = false
+        f.model.selectProfile(id: readingID)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.oneWindowAtATime] == true && f.model.issue(for: .dimBackground) != nil &&
+            f.backend.changes.count == count, "Denied profile dimming changed the earlier focus mode")
+        f.accessibility.allowed = true
+        f.model.selectProfile(id: readingID)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.dimBackground] == true && f.backend.values[.oneWindowAtATime] == false,
+            "A failed profile could not be reapplied after permission recovery")
+    }
+
     @MainActor private static func testFocusChoicePersistence() async throws {
         let f = Fixture(); defer { f.close() }
         try await f.start()
@@ -250,9 +637,10 @@ private func require(_ condition: Bool, _ message: String) throws {
     }
 
     @MainActor private static func testOneWindowMenuStageLifecycle() async throws {
-        for initiallyEnabled in [false, true] {
+        for (initiallyEnabled, recentHidden) in [(false, false), (false, true), (true, false), (true, true)] {
             let f = Fixture(); defer { f.close() }
             f.backend.values[.stageManager] = initiallyEnabled
+            f.backend.values[.hideRecentApps] = recentHidden
             try await f.start()
             let controller = SettingsMenuController(model: f.model, showWindow: {}, quit: {})
             f.model.onRefresh = { [weak controller] in controller?.update() }
@@ -261,22 +649,22 @@ private func require(_ condition: Bool, _ message: String) throws {
             f.backend.holdApply = true
             try require(NSApp.sendAction(action, to: row.target, from: row), "One-window menu action was not handled")
             try await until { f.backend.blockedApply != nil }
-            try require(f.model.displayedEnabled(.stageManager) == true && row.state == .on,
-                "Queued automatic Stage Manager input was not displayed")
+            try require(f.model.displayedEnabled(.stageManager) == true && f.model.displayedEnabled(.hideRecentApps) == true && row.state == .on,
+                "Queued automatic Stage Manager and Hide recent apps input was not displayed")
             f.backend.releaseApply()
             try await until { !f.model.busy }
-            try require(f.backend.values[.stageManager] == true && f.backend.values[.oneWindowAtATime] == true,
-                "One-window menu input did not enable Stage Manager")
+            try require(f.backend.values[.stageManager] == true && f.backend.values[.hideRecentApps] == true && f.backend.values[.oneWindowAtATime] == true,
+                "One-window menu input did not enable both prerequisites")
             try require(NSApp.sendAction(action, to: row.target, from: row), "One-window menu disable was not handled")
             try await until { !f.model.busy }
-            try require(f.backend.values[.stageManager] == initiallyEnabled && row.state == .off,
-                "One-window disable did not restore the earlier Stage Manager state")
+            try require(f.backend.values[.stageManager] == initiallyEnabled && f.backend.values[.hideRecentApps] == recentHidden && row.state == .off,
+                "One-window disable did not restore both earlier prerequisite states")
             f.model.set(.oneWindowAtATime, enabled: true)
             try await until { !f.model.busy }
             f.model.set(.dimBackground, enabled: true)
             try await until { !f.model.busy }
-            try require(f.backend.values[.stageManager] == initiallyEnabled && f.backend.values[.dimBackground] == true,
-                "Switching to dimming did not restore Stage Manager")
+            try require(f.backend.values[.stageManager] == initiallyEnabled && f.backend.values[.hideRecentApps] == recentHidden && f.backend.values[.dimBackground] == true,
+                "Switching to dimming did not restore both prerequisites")
         }
     }
 

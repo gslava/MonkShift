@@ -10,7 +10,11 @@ struct ShortcutList: View {
                     HStack {
                         Text(action.title)
                         Spacer()
-                        Text(manager.shortcuts[action]?.label ?? "Unassigned").monospaced()
+                        if let shortcut = manager.shortcuts[action] {
+                            ShortcutKeys(shortcut: shortcut)
+                        } else {
+                            Text("Unassigned").monospaced()
+                        }
                         Button("Edit…") { editing = action }.accessibilityLabel("Edit \(action.title) shortcut")
                     }
                     if let error = manager.errors[action] { Text(error).font(.callout).foregroundStyle(.red) }
@@ -52,7 +56,7 @@ struct ShortcutEditor: View {
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Text(draft.label).monospaced().foregroundStyle(.secondary)
+                ShortcutKeys(shortcut: draft).foregroundStyle(.secondary)
                 Button("Save") {
                     manager.update(draft, for: action)
                     if manager.errors[action] == nil { dismiss() }
@@ -61,5 +65,20 @@ struct ShortcutEditor: View {
             }
         }
         .padding(24).frame(width: 500)
+    }
+}
+
+private struct ShortcutKeys: View {
+    let shortcut: Shortcut
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(shortcut.label.enumerated()), id: \.offset) { _, symbol in
+                Text(String(symbol)).monospaced()
+            }
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(shortcut.label)
     }
 }

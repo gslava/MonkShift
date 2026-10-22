@@ -37,7 +37,8 @@ import MonkShiftCore
     private var statusItem: NSStatusItem!
     private var settingsMenu: SettingsMenuController!
     private var window: NSWindow?
-    private var workspaceObservers: [NSObjectProtocol] = []
+    private var settingsObserver: SystemSettingsObserver?
+    private var menuIsOpen = false
     private var reopenObserver: NSObjectProtocol?
 
     init(directory: URL) { self.directory = directory; super.init() }
@@ -60,11 +61,9 @@ import MonkShiftCore
         statusItem.menu = settingsMenu.menu
         model.onRefresh = { [weak self] in self?.updateMenu() }
         installApplicationMenu()
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.activeSpaceDidChangeNotification] {
-            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.refreshIfVisible() }
-            })
-        }
+        settingsObserver = SystemSettingsObserver(isInterfaceVisible: { [weak self] in
+            self?.window?.isVisible == true || self?.menuIsOpen == true
+        }, onChange: { [weak self] in self?.model.requestExternalRefresh() })
         model.requestStartupPermissions()
         showWindow(nil)
     }
@@ -80,13 +79,11 @@ import MonkShiftCore
         return .terminateNow
     }
     func applicationWillTerminate(_ notification: Notification) {
+        settingsObserver?.stop()
         model.shutdown()
         model.shortcuts.shutdown()
-        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         if let reopenObserver { DistributedNotificationCenter.default().removeObserver(reopenObserver) }
     }
-
-    private func refreshIfVisible() { if window?.isVisible == true { model.refresh() } }
 
     @objc private func showWindow(_ sender: Any?) {
         if window == nil {
@@ -121,6 +118,9 @@ import MonkShiftCore
         model.refresh()
         updateMenu()
     }
+
+    func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true; model.refresh() }
+    func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
 
     private func updateMenu() {
         settingsMenu.update()

@@ -1,6 +1,6 @@
 cask "monkshift" do
-  version "0.1.0"
-  sha256 "d50860e618c786f479e1673fc075f89cb24da545f5c690012ac4721bc6be806b"
+  version "0.1.4"
+  sha256 "0d4b1ee1ac3d8feab5dfee83f477e96a0a45f6e9a6db5b3fd90e5fb56a479912"
 
   url "https://github.com/gslava/MonkShift/releases/download/v#{version}/MonkShift-#{version}-universal.zip"
   name "MonkShift"

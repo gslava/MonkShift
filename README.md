@@ -60,7 +60,7 @@ in `Resources/Info.plist`. See the [release instructions](docs/DISTRIBUTION.md).
 
 ## Install with Homebrew
 
-Once the first matching GitHub release and cask are published:
+Install version **0.1.4** from this repository's custom tap:
 
 ```sh
 brew tap gslava/monkshift https://github.com/gslava/MonkShift.git

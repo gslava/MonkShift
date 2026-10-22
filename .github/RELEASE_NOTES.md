@@ -1,5 +1,7 @@
 ## Highlights since v0.1.3
 
+**Version 0.1.4 · Build 5**
+
 - **Settings profiles:** Default captures your current settings. Create named
   copies and switch profiles from the window or menu bar to apply them
   immediately. Changes save automatically; original restore baselines are kept.
@@ -28,6 +30,14 @@ Drag **MonkShift.app** to **Applications** and launch it there. Allow Automation
 access to System Events; Accessibility is needed for background dimming.
 
 The ZIP contains the same app. SHA-256 checksums accompany both downloads.
+
+The Homebrew cask in this repository also installs version **0.1.4**, pinned to
+the published ZIP checksum. Existing tap installations can update with:
+
+```sh
+brew update
+brew upgrade --cask gslava/monkshift/monkshift
+```
 
 MonkShift is ad-hoc signed and **not notarized** with an Apple Developer ID.
 macOS may require approval in System Settings → Privacy & Security.

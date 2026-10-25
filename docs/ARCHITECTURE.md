@@ -31,7 +31,7 @@ releases the lock on exit or a crash; an old PID file alone cannot block startup
 | Hide menu bar | System Events → `autohide menu bar of dock preferences`. Auto-hides; reveal by moving to the top edge. |
 | Stage Manager | `com.apple.WindowManager` → `GloballyEnabled`. Requires “Displays have separate Spaces”; if disabled, MonkShift explains the prerequisite. |
 | Hide recent apps | `com.apple.WindowManager` → `AutoHide = true`. Only affects Stage Manager while it is enabled. |
-| One window at a time | `com.apple.WindowManager` → `AppWindowGroupingBehavior = 1`. Automatically enables Stage Manager and Hide recent apps, saving both earlier states for restoration when this mode is disabled or replaced with dimming. Mutually exclusive with background dimming. |
+| One window at a time | `com.apple.WindowManager` → `AppWindowGroupingBehavior = 0`; disabling selects `1` (all windows). `2` is also a single-window mode. Automatically enables Stage Manager and Hide recent apps, saving both earlier states for restoration when this mode is disabled or replaced with dimming. Mutually exclusive with background dimming. |
 | Dim background windows | Native, click-through AppKit windows ordered immediately below the active normal-level window. Menus retain the last window's dimming; a new document window becomes the anchor. AX/Workspace and native menu notifications identify focus; no screen capture, private window API, helper or polling. Independent 0–90% intensity. |
 | Hide desktop icons and widgets | `com.apple.WindowManager` → `StandardHideDesktopIcons`, `HideDesktop`, `StandardHideWidgets`, and `StageManagerHideWidgets` set to `1`. Hides both types of items on the desktop and in Stage Manager without restarting Finder. All four original values, including absent keys, are saved for restoration. |
 | Reduce Motion | System Accessibility → Display → Reduce Motion, through dynamically resolved `_AXInterfaceGetReduceMotionEnabled` / `_AXInterfaceSetReduceMotionEnabled`. Included in Monk Mode and restored to its saved enabled/disabled state. |
@@ -41,6 +41,12 @@ releases the lock on exit or a crash; an old PID file alone cannot block startup
 The grayscale slider normalizes the native exported minimum/maximum intensity
 range to 0–100% (on the development Mac, native 0.25–1.0). Its 0% represents the
 lowest supported filter intensity; disabling the filter removes it completely.
+
+Grouping values were verified against the native
+`WindowManager.AppWindowGroupingBehavior` enum on macOS 15.8.1. Missing or
+unsupported values report Unknown instead of being coerced to a Boolean. Saved
+snapshots preserve exact values, types and absent keys. Dimming checks for an
+active single-window mode only while Stage Manager is enabled.
 
 **Compatibility:** Dock, Stage Manager and desktop visibility preference keys, Reduce Motion setters and the color filter symbols are not stable public configuration APIs. Their actual visual effects require manual checks on each supported macOS version. Checkboxes read system preferences/API state, not screen pixels. A preference read-back confirms the stored value; it cannot prove the corresponding daemon rendered the effect. Missing symbols, failed writes and unknown states are shown explicitly. No SIP changes or administrator privileges are used.
 
@@ -127,4 +133,3 @@ compositing work charged to system processes. See
 - [Apple: display color filters](https://support.apple.com/en-ie/guide/mac-help/mchl11ddd4b3/mac).
 - [Apple: custom views in menu items](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/MenuList/Articles/ViewsInMenuItems.html).
 - API signatures/category/type and notification behavior were cross-checked against [brettferdosi/grayscale's API notes](https://github.com/brettferdosi/grayscale/blob/master/Sources/Bridge.h), system SDK exports and read-only runtime probes. No third-party runtime code is linked.
-- [Hexnode's Stage Manager configuration reference](https://www.hexnode.com/mobile-device-management/help/script-to-enable-disable-stage-manager-on-mac/) describes its configuration scripts and grouping values.

@@ -1,43 +1,44 @@
-## Highlights since v0.1.3
+## Fixes since v0.1.4
 
-**Version 0.1.4 · Build 5**
+**Version 0.1.5 · Build 6**
 
-- **Settings profiles:** Default captures your current settings. Create named
-  copies and switch profiles from the window or menu bar to apply them
-  immediately. Changes save automatically; original restore baselines are kept.
-- **Focus shortcuts:** Control + Option + Command + W toggles one-window mode;
-  Control + Option + Command + D toggles background dimming. Edit them in
-  Shortcuts, with clearer spacing between key symbols. Existing bindings remain.
-- **One-window mode:** automatically enables Stage Manager and Hide recent apps.
-  Disabling it or switching to dimming restores both earlier states, including
-  after a restart or failed restoration. Existing restore journals remain readable.
-- **Automatic status updates:** known preference changes from other apps and
-  system events trigger a complete status read without periodic polling. Saved
-  profiles and restore records remain unchanged by external edits. Changes
-  without a macOS notification appear on opening, activation or Refresh.
+- Fix **Show windows one at a time** switching in the wrong direction. Enabling
+  now selects the native single-window mode; disabling selects all windows.
+- Read both native single-window variants correctly. Missing or unsupported
+  grouping values show **Unknown** instead of an incorrect checkbox state.
+- Keep background dimming available when Stage Manager is off, regardless of its
+  stored grouping preference. Unknown active grouping pauses dimming safely.
+- Preserve original grouping values, absent preference keys and Stage Manager /
+  Hide recent apps baselines for restoration. Existing profiles and restore files
+  remain compatible.
+
+## Documentation
+
+The README is shorter, with detailed guides under `docs/`. Installation now
+includes the macOS first-launch warning and the **Open Anyway** instructions.
 
 ## Verification
 
-150 automated checks passed locally on macOS 15.8.1 (Apple Silicon), including
-cross-process preference observation with isolated test data. Light and dark UI
-fixtures were inspected. Live system effects and shortcut delivery on other macOS
-versions and Intel Macs remain manual checks.
+156 automated checks passed locally on macOS 15.8.1 (Apple Silicon), including
+six new preferences-adapter checks for grouping direction, native values,
+rejected writes, restoration and focus-mode dependencies. Checks use isolated
+preferences and fake system clients; they do not change macOS settings.
+Live visual effects on macOS 14 and Intel Macs remain manual checks.
 
 ## Installation
 
-Download the **Universal DMG** for macOS 14 or later (Apple Silicon and Intel).
-Drag **MonkShift.app** to **Applications** and launch it there. Allow Automation
-access to System Events; Accessibility is needed for background dimming.
+Download the **Universal DMG** for macOS 14 or later (Apple Silicon and Intel),
+then drag **MonkShift.app** to **Applications**. The ZIP contains the same app;
+SHA-256 checksums accompany both downloads.
 
-The ZIP contains the same app. SHA-256 checksums accompany both downloads.
-
-The Homebrew cask in this repository also installs version **0.1.4**, pinned to
-the published ZIP checksum. Existing tap installations can update with:
+To update an existing Homebrew installation:
 
 ```sh
 brew update
 brew upgrade --cask gslava/monkshift/monkshift
 ```
 
-MonkShift is ad-hoc signed and **not notarized** with an Apple Developer ID.
-macOS may require approval in System Settings → Privacy & Security.
+MonkShift is ad-hoc signed and **not notarized**. If macOS blocks first launch,
+open **System Settings → Privacy & Security → Open Anyway**, then confirm **Open**
+if you trust the download. Grant Automation access to System Events;
+Accessibility is needed for background dimming.

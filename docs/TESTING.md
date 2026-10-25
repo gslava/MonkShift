@@ -55,6 +55,12 @@ be blocked by a filesystem sandbox; it does not write real macOS settings.
 
 Automated checks do not establish live menu compatibility or CPU/RAM usage.
 
+Window-grouping checks exercise the real preferences adapter with in-memory
+storage: native values 0/1/2, missing/unsupported states, enable/disable direction,
+ignored writes and exact restoration including absent keys. Focus-cycle checks
+combine that adapter with the restore engine across all Stage Manager/recent-app
+baselines. Dimming conflicts require Stage Manager to be enabled.
+
 ## Fixture previews
 
 `bash scripts/render-previews.sh` renders light/dark window and onboarding PNGs into `build/previews` using fixture state. The controls use the same 716 × 568 pt content size as the app. They cover off, all enabled with/without a saved session, background dimming with/without Accessibility, partially enabled, unknown, unavailable, failed-operation, applying and refreshing states, plus the minimum window size and the menu bar icon at native and enlarged sizes. The direct native intensity view is rendered with grayscale on/off, disabled, and at the 0%/100% endpoints. Add `--readme` to refresh the tracked examples in `docs/images`. The renderer is compiled only with `MONKSHIFT_PREVIEW`; it is absent from release builds. These images verify layout, not real OS behavior.
@@ -63,6 +69,7 @@ Automated checks do not establish live menu compatibility or CPU/RAM usage.
 
 Run on **both macOS 14 and macOS 15**, and on newer macOS versions before claiming support. Record the versions actually tested:
 
+- With Stage Manager on and two windows from the same app open, enable **Show windows one at a time** and confirm System Settings selects **One at a Time** and the visual effect matches. Disable it and confirm **All at Once**. Repeat with a previously enabled Stage Manager and with it initially off. Check background dimming still works with Stage Manager off even when its stored grouping selects a single-window variant.
 - With the controls visible, toggle Stage Manager using an external shortcut and System Settings. Check its observed status changes after macOS publishes the preference update. Repeat for Dock/menu bar, recent apps, window grouping, desktop visibility, Reduce Motion and color-filter changes. Test external changes while a slider is being dragged and while a profile/setting change is queued. Verify the saved profile and Restore All baseline are retained. Check wallpaper changes on return to MonkShift or Refresh when no notification is delivered.
 - Deny the permission: controls and shortcuts remain locked. Grant it: controls unlock. Revoke it: future actions are blocked.
 - After granting permission, close the window and let System Events exit while idle. Open MonkShift's menu: controls should appear after the background check, without another consent prompt. Repeat after restarting MonkShift.

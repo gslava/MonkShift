@@ -102,9 +102,9 @@ After publication, verify the public download and checksum and test installation
 on a separate Mac. Shortcuts registration and Gatekeeper first-launch behavior
 remain live verification steps.
 
-For version `0.1.4`, download names are `MonkShift-0.1.4-universal.dmg` and
-`MonkShift-0.1.4-universal.zip`, under
-`https://github.com/gslava/MonkShift/releases/download/v0.1.4/`.
+Download names are `MonkShift-<version>-universal.dmg` and
+`MonkShift-<version>-universal.zip`, under
+`https://github.com/gslava/MonkShift/releases/download/v<version>/`.
 
 ## Homebrew custom tap
 
@@ -120,11 +120,11 @@ brew tap gslava/monkshift https://github.com/gslava/MonkShift.git
 brew install --cask gslava/monkshift/monkshift
 ```
 
-The committed cask currently targets **0.1.4** and matches the ZIP attached to
-that release. The application UI reads its version and build from the installed
-bundle's `Info.plist`; that release displays **Version 0.1.4**, build **5**. A
-previously built local `.app` retains its earlier metadata until rebuilt or
-replaced with the published app, even when the source plist has been updated.
+The committed cask pins the published version and its ZIP checksum. The
+application UI reads its version and build from the installed bundle's
+`Info.plist`. A previously built local `.app` retains its earlier metadata until
+rebuilt or replaced with the published app, even when the source plist has been
+updated.
 
 The explicit repository URL is required: the usual shorthand otherwise looks
 for a separate repository called `homebrew-monkshift`. Updates use:

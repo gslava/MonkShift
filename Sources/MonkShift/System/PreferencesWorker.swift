@@ -7,6 +7,13 @@ actor PreferencesWorker {
     typealias ReadValue = @Sendable (String, String) -> Any?
     typealias WriteValue = @Sendable (String, String, Any?) throws -> Void
 
+    // Native WindowManager enum values, not a Boolean preference.
+    private enum WindowGrouping: Int {
+        case singleWindow = 0
+        case allWindows = 1
+        case singleWindowWithPromotion = 2
+    }
+
     private let dock = "com.apple.dock"
     private let windowManager = "com.apple.WindowManager"
     private let readValue: ReadValue
@@ -65,7 +72,13 @@ actor PreferencesWorker {
             return FeatureState(enabled: (value(windowManager, "AutoHide") as? NSNumber)?.boolValue ?? false,
                 detail: "Takes effect while Stage Manager is on.")
         case .oneWindowAtATime:
-            return FeatureState(enabled: (value(windowManager, "AppWindowGroupingBehavior") as? NSNumber)?.boolValue ?? false,
+            guard let number = value(windowManager, "AppWindowGroupingBehavior") as? NSNumber,
+                  let grouping = WindowGrouping(rawValue: number.intValue),
+                  number.doubleValue == Double(grouping.rawValue) else {
+                return FeatureState(enabled: nil,
+                    detail: "The window grouping setting is missing or unsupported. Choose “Show windows from an application” in System Settings → Desktop & Dock, then Refresh.")
+            }
+            return FeatureState(enabled: grouping != .allWindows,
                 detail: "Automatically enables Stage Manager and Hide recent apps. Turning this mode off or choosing dimming restores both previous states.")
         case .hideDesktopItems:
             let keys = keys(feature)!.1
@@ -92,6 +105,14 @@ actor PreferencesWorker {
 
     func intensity() throws -> Double { try colorFilter.get().normalizedIntensity() }
 
+    func oneWindowModeIsActive() throws -> Bool {
+        guard try read(.stageManager).enabled == true else { return false }
+        guard let enabled = try read(.oneWindowAtATime).enabled else {
+            throw MonkError("The current Stage Manager window grouping is unknown.")
+        }
+        return enabled
+    }
+
     func snapshot(_ feature: Feature) throws -> Data {
         if feature == .hideDesktopItems { _ = try read(feature) }
         if let (domain, keys) = keys(feature) {
@@ -112,7 +133,7 @@ actor PreferencesWorker {
             guard try read(feature).available else { throw MonkError("Stage Manager requires “Displays have separate Spaces”.") }
             try write(windowManager, "GloballyEnabled", true)
         case .hideRecentApps: try write(windowManager, "AutoHide", true)
-        case .oneWindowAtATime: try write(windowManager, "AppWindowGroupingBehavior", 1)
+        case .oneWindowAtATime: try setWindowGrouping(.singleWindow)
         case .hideDesktopItems: try setDesktopItemsHidden(true)
         case .reduceMotion: try reduceMotion.get().set(enabled: true)
         case .grayscale: try colorFilter.get().apply(intensity: intensity)
@@ -127,11 +148,18 @@ actor PreferencesWorker {
             try write(dock, "autohide-time-modifier", nil)
         case .stageManager: try write(windowManager, "GloballyEnabled", false)
         case .hideRecentApps: try write(windowManager, "AutoHide", false)
-        case .oneWindowAtATime: try write(windowManager, "AppWindowGroupingBehavior", 0)
+        case .oneWindowAtATime: try setWindowGrouping(.allWindows)
         case .hideDesktopItems: try setDesktopItemsHidden(false)
         case .reduceMotion: try reduceMotion.get().set(enabled: false)
         case .grayscale: try colorFilter.get().disable()
         default: throw MonkError("\(feature.title) does not use the preferences backend.")
+        }
+    }
+
+    private func setWindowGrouping(_ grouping: WindowGrouping) throws {
+        try write(windowManager, "AppWindowGroupingBehavior", grouping.rawValue)
+        guard (value(windowManager, "AppWindowGroupingBehavior") as? NSNumber)?.doubleValue == Double(grouping.rawValue) else {
+            throw MonkError("macOS did not retain the window grouping setting. Its previous value is saved.")
         }
     }
 

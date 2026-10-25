@@ -76,7 +76,10 @@ import Foundation
             try await backend.restore(feature, from: snapshot)
             // A checkbox must turn the feature off even if it was already on before MonkShift.
             // Keep the original snapshot until Restore All so the exact baseline remains recoverable.
-            if try await backend.read(feature).enabled == true { try await backend.disable(feature) }
+            let restoredEnabled = try await backend.read(feature).enabled
+            if restoredEnabled == true || (feature == .oneWindowAtATime && restoredEnabled == nil) {
+                try await backend.disable(feature)
+            }
             try await backend.finishChanges()
         } else {
             try await backend.disable(feature)

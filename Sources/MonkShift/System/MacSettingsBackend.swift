@@ -26,7 +26,7 @@ extension ObservedSettingsBackend {
                 intensity: defaults.object(forKey: "backgroundDimmingCurrentIntensity") == nil ? 0.5 : defaults.double(forKey: "backgroundDimmingCurrentIntensity")),
             tracker: FocusedWindowTracker(), renderer: DimmingOverlayRenderer(),
             trusted: { accessibility.refresh() },
-            oneWindowEnabled: { try await preferences.read(.oneWindowAtATime).enabled == true },
+            oneWindowEnabled: { try await preferences.oneWindowModeIsActive() },
             save: { state in
                 defaults.set(state.enabled, forKey: "backgroundDimmingEnabled")
                 defaults.set(state.intensity, forKey: "backgroundDimmingCurrentIntensity")
@@ -95,7 +95,8 @@ extension ObservedSettingsBackend {
         case .blackWallpaper: try wallpaper.restore(data)
         default:
             try await preferences.restore(feature, from: data)
-            if feature == .oneWindowAtATime, try await preferences.read(feature).enabled == true {
+            // An unknown restored mode is also unsafe for dimming while Stage Manager is on.
+            if feature == .oneWindowAtATime, (try? await preferences.oneWindowModeIsActive()) != false {
                 try await dimming.set(enabled: false)
             }
         }

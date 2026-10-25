@@ -46,6 +46,8 @@ brew tap gslava/monkshift https://github.com/gslava/MonkShift.git
 brew install --cask gslava/monkshift/monkshift
 ```
 
+<img src="docs/images/gatekeeper-warning.png" width="348" alt="Example macOS warning: MonkShift.app Not Opened. Apple could not verify the app is free of malware.">
+
 The app is **ad-hoc signed and not notarized**. If macOS cannot verify it,
 dismiss the alert. If you trust the download, open **System Settings → Privacy &
 Security**, click **Open Anyway**, then confirm **Open**. See

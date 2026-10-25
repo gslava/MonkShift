@@ -46,9 +46,13 @@ brew tap gslava/monkshift https://github.com/gslava/MonkShift.git
 brew install --cask gslava/monkshift/monkshift
 ```
 
-The app is **ad-hoc signed and not notarized**. macOS may require approval in
-System Settings → Privacy & Security on first launch. Homebrew does not launch
-the app or grant permissions. See [installation and updates](docs/DISTRIBUTION.md#first-launch-and-updates).
+The app is **ad-hoc signed and not notarized**. If macOS cannot verify it,
+dismiss the alert. If you trust the download, open **System Settings → Privacy &
+Security**, click **Open Anyway**, then confirm **Open**. See
+[Apple's instructions](https://support.apple.com/en-us/102445).
+
+Homebrew does not launch the app or grant permissions. See
+[installation and updates](docs/DISTRIBUTION.md#first-launch-and-updates).
 
 ## Permissions and privacy
 

@@ -76,15 +76,15 @@ an active drag or a newer queued value.
 
 **Window Focus** has two mutually exclusive checkboxes: **Show windows one at a time** and **Dim background windows**. Enabling one disables the other after both original states have been saved. Turning both off retains the last enabled choice for the next Monk Mode session; the choice survives a restart. The initial choice is One window at a time, preserving existing behavior. A failed selected mode is reported and does not silently select the other one.
 
-Enabling **Show windows one at a time** also enables **Stage Manager** and **Hide recent apps**. Disabling
-the checkbox or switching to **Dim background windows** immediately restores the
-state of both settings saved before that focus cycle: each stays on if it was already
-on, and returns to off if MonkShift enabled it. Repeated enables preserve those
-baselines. A new cycle captures the then-current states. These snapshots survive
-restarts, remain retryable after restore/write failures, and are separate from
-the original baselines used by **Restore All** and a surrounding Monk Mode
-session. Existing restore journals remain readable. If either prerequisite cannot be
-enabled, the previous focus mode is left unchanged and the error is reported.
+Enabling **Show windows one at a time** also enables **Stage Manager** and
+**Hide recent apps**. Disabling the checkbox or switching to **Dim background
+windows** turns Stage Manager off so windows from other apps become visible,
+even if Stage Manager was already on before that focus cycle. Recent-apps
+visibility returns to its saved state. **Restore All** and session restoration
+can still recover the exact original Stage Manager setting. Existing journals
+remain readable. Failed shutdowns retain their restore records for retry; they
+are not reported as successful. If a prerequisite cannot be enabled, the previous
+focus mode is left unchanged and the error is reported.
 
 Background dimming has its own **0–90%** slider in the window and directly below its native menu checkbox, defaulting to 50%. It is independent of grayscale. Menu adjustment requires dimming to be enabled; the window can save an intensity while it is off. Dimming at 0% draws no layer. The overlay does not intercept mouse or keyboard input and has no blur or animation. One reusable window per connected display is positioned below the focused window; windows above that layer, such as floating palettes and menus, remain visible.
 

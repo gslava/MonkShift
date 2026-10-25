@@ -31,7 +31,13 @@ import Foundation
         let suite = SettingsEngineTests()
         let summary = FeatureSummaryTests()
         let profiles = ProfileTests()
+        let focusExit = FocusExitTests()
         let tests: [(String, () async throws -> Void)] = [
+            ("Exiting focus stops pre-existing Stage Manager and preserves Restore All", focusExit.testExitStopsPreexistingStageManagerAndRestoreAllRecoversIt),
+            ("Exiting an external focus mode saves Stage Manager before mutation", focusExit.testExitOfExternallyEnabledModeSavesStageBeforeStoppingIt),
+            ("Failed focus shutdown remains retryable after restart", focusExit.testFailedShutdownRemainsRetryableAcrossRestart),
+            ("Ignored Stage Manager shutdown is reported and remains recoverable", focusExit.testIgnoredShutdownDoesNotReportSuccessOrLoseBaseline),
+            ("Dimming cannot stop Stage Manager without a durable snapshot", focusExit.testDimmingDoesNotStopStageWithoutItsSnapshot),
             ("Profiles copy settings and survive restart with validated names", profiles.testLibraryRoundTripAndNames),
             ("Invalid profiles preserve the existing file", profiles.testInvalidLibrariesPreserveFiles),
             ("Profile switches save all baselines before the first mutation", profiles.testSwitchesSaveEveryBaselineBeforeMutation),
@@ -39,18 +45,18 @@ import Foundation
             ("Failed profile application restores after restart", profiles.testProfileFailuresRemainRecoverableAfterRestart),
             ("Profile switches preserve a surrounding Monk baseline", profiles.testProfileWithinMonkPreservesSessionBaseline),
             ("Profile operations reject interleaved changes", profiles.testProfileOperationsRejectInterleaving),
-            ("One-window mode restores Stage Manager and recent apps for each cycle", suite.testOneWindowRestoresBothPrerequisitesForEachCycle),
+            ("Focus exit stops Stage Manager and restores recent-app visibility", suite.testOneWindowStopsStageAndRestoresRecentAppsForEachCycle),
             ("Recent apps prerequisite failures preserve the other mode", suite.testRecentAppsPrerequisiteFailuresPreserveOtherMode),
             ("Recent apps restoration survives restart and retries", suite.testRecentAppsRestoreFailureSurvivesRestart),
             ("Monk sessions preserve the recent apps focus baseline", suite.testMonkPreservesRecentAppsFocusBaseline),
             ("Monk recent apps failures preserve the other mode", suite.testMonkRecentAppsFailuresPreserveOtherMode),
-            ("One-window mode restores Stage Manager for each cycle", suite.testOneWindowRestoresStageManagerForEachCycle),
-            ("Switching to dimming restores Stage Manager first", suite.testDimmingSwitchRestoresStageManager),
+            ("Focus exit stops Stage Manager while Restore All preserves the first baseline", suite.testOneWindowStopsStageManagerAndPreservesBaseline),
+            ("Switching to dimming stops Stage Manager first", suite.testDimmingSwitchStopsStageManager),
             ("Stage Manager prerequisite failures preserve the other mode", suite.testStageManagerPrerequisiteFailuresPreserveOtherMode),
-            ("Stage Manager restore failure survives restart and retries", suite.testStageManagerRestoreRetryAfterRestart),
+            ("Stage Manager shutdown failure survives restart and retries", suite.testStageManagerShutdownRetryAfterRestart),
             ("Failed focus metadata writes remain retryable", suite.testStageManagerCycleClearFailureIsRetryable),
             ("Monk restoration preserves the earlier individual focus cycle", suite.testMonkPreservesEarlierFocusCycle),
-            ("Focus changes within Monk restore the immediate Stage Manager state", suite.testOneWindowWithinMonkRestoresSessionStageState),
+            ("Focus exit within Monk stops Stage Manager and preserves session restoration", suite.testFocusExitWithinMonkStopsStageAndRetainsSession),
             ("Monk Stage Manager failures do not switch focus modes", suite.testMonkStageManagerFailurePreservesOtherMode),
             ("Existing journals decode without focus metadata", suite.testLegacyJournalDecodesWithoutFocusMetadata),
             ("Failed session metadata cleanup survives restart", suite.testMonkFocusCleanupFailureRetainsSession),

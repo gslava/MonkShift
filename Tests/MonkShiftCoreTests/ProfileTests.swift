@@ -74,7 +74,7 @@ import MonkShiftCore
         backend.beforeWrite = nil
         let baseline = store.journal.individual
         await expectTrue(try await engine.applyProfile(settings([.dimBackground], mode: .dimBackground)).isEmpty)
-        await expectEqual(backend.values[.stageManager], backend.initial)
+        await expectEqual(try backend.read(.stageManager).enabled, false)
         await expectEqual(backend.values[.hideRecentApps], backend.initial)
         await expectEqual(backend.intensities[.dimBackground], 0.65)
         await expectEqual(store.journal.individual, baseline)

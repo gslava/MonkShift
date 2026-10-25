@@ -65,12 +65,12 @@ enum WindowGroupingChecks {
     static func testObservedModes() async throws {
         // Raw values verified against WindowManager.AppWindowGroupingBehavior on macOS 15.8.1.
         for (raw, enabled) in [(0, true), (1, false), (2, true)] {
-            let worker = GroupingPreferences([key: raw]).worker()
+            let worker = GroupingPreferences([key: raw, "GloballyEnabled": true]).worker()
             try require(try await worker.read(.oneWindowAtATime).enabled == enabled,
                 "Grouping value \(raw) was interpreted as the wrong mode")
         }
         for invalid: Any? in [nil, "0", 3, -1, 0.5] {
-            let worker = GroupingPreferences(invalid.map { [key: $0] } ?? [:]).worker()
+            let worker = GroupingPreferences(invalid.map { [key: $0, "GloballyEnabled": true] } ?? ["GloballyEnabled": true]).worker()
             let state = try await worker.read(.oneWindowAtATime)
             try require(state.enabled == nil && state.detail != nil,
                 "Missing or unsupported grouping was silently interpreted as a known mode")
@@ -123,6 +123,8 @@ enum WindowGroupingChecks {
         for stage in [false, true] {
             for (raw, singleWindow) in [(0, true), (1, false), (2, true)] {
                 let worker = GroupingPreferences([key: raw, "GloballyEnabled": stage]).worker()
+                try require(try await worker.read(.oneWindowAtATime).enabled == (stage && singleWindow),
+                    "One-window checkbox did not reflect whether Stage Manager was active")
                 try require(try await worker.oneWindowModeIsActive() == (stage && singleWindow),
                     "Dimming conflict did not match the active Stage Manager mode")
             }
@@ -153,13 +155,15 @@ enum WindowGroupingChecks {
                     try await engine.set(.oneWindowAtATime, enabled: false, intensity: 0.5)
                     try require((preferences.contents()[key] as? NSNumber)?.intValue == 1,
                         "Turning the checkbox off restored an active or unknown one-window mode")
-                    try require(preferences.contents()["GloballyEnabled"] as? Bool == stage &&
-                        preferences.contents()["AutoHide"] as? Bool == recent, "Focus cycle lost prerequisite baselines")
+                    try require(preferences.contents()["GloballyEnabled"] as? Bool == false &&
+                        preferences.contents()["AutoHide"] as? Bool == recent, "Focus exit left Stage Manager hiding other apps or lost recent-apps settings")
                     try await engine.set(.dimBackground, enabled: true, intensity: 0.5)
                     try require(try await backend.read(.dimBackground).enabled == true, "Dimming could not replace one-window mode")
                     try require(try await engine.restoreIndividual().isEmpty, "Original focus settings could not be restored")
                     try require((preferences.contents()[key] as? NSNumber)?.intValue == original,
                         "Restore All lost the exact original grouping or absence")
+                    try require(preferences.contents()["GloballyEnabled"] as? Bool == stage &&
+                        preferences.contents()["AutoHide"] as? Bool == recent, "Restore All lost the original Stage Manager/recent-apps settings")
                 }
             }
         }

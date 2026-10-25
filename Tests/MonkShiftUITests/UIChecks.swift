@@ -200,7 +200,9 @@ private func require(_ condition: Bool, _ message: String) throws {
             ("Focused metadata matching rejects ambiguous and foreign windows", DimmingChecks.testMetadataMatching),
             ("Focus selection survives restart and Monk Mode uses that choice", testFocusChoicePersistence),
             ("Rapid focus switching remains exclusive and restores both baselines", testRapidFocusSwitching),
-            ("One-window menu control enables and restores Stage Manager", testOneWindowMenuStageLifecycle),
+            ("One-window menu control enters and exits Stage Manager", testOneWindowMenuStageLifecycle),
+            ("One-window checkbox stops pre-existing Stage Manager and autosaves the result", testOneWindowExitAutosavesStageOff),
+            ("One-window shortcut stops pre-existing Stage Manager", testOneWindowShortcutExit),
             ("Failed automatic Stage Manager input rolls back displayed state", testOneWindowStageFailureReadback),
             ("Dimming menu slider is independent and limited to 90 percent", testDimmingMenu),
             ("Startup asks for Accessibility once without blocking other features", testAccessibilityStartup),
@@ -657,15 +659,59 @@ private func require(_ condition: Bool, _ message: String) throws {
                 "One-window menu input did not enable both prerequisites")
             try require(NSApp.sendAction(action, to: row.target, from: row), "One-window menu disable was not handled")
             try await until { !f.model.busy }
-            try require(f.backend.values[.stageManager] == initiallyEnabled && f.backend.values[.hideRecentApps] == recentHidden && row.state == .off,
-                "One-window disable did not restore both earlier prerequisite states")
+            try require(f.backend.values[.stageManager] == false && f.backend.values[.hideRecentApps] == recentHidden && row.state == .off,
+                "One-window disable left Stage Manager hiding windows from other apps")
             f.model.set(.oneWindowAtATime, enabled: true)
             try await until { !f.model.busy }
             f.model.set(.dimBackground, enabled: true)
             try await until { !f.model.busy }
-            try require(f.backend.values[.stageManager] == initiallyEnabled && f.backend.values[.hideRecentApps] == recentHidden && f.backend.values[.dimBackground] == true,
-                "Switching to dimming did not restore both prerequisites")
+            try require(f.backend.values[.stageManager] == false && f.backend.values[.hideRecentApps] == recentHidden && f.backend.values[.dimBackground] == true,
+                "Switching to dimming left Stage Manager on or lost recent-apps settings")
         }
+    }
+
+    @MainActor private static func testOneWindowExitAutosavesStageOff() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.values[.stageManager] = true
+        try await f.start()
+        f.model.set(.oneWindowAtATime, enabled: true)
+        try await until { !f.model.busy }
+        f.backend.holdRead = true
+        f.model.refresh()
+        try await until { f.backend.blockedRead != nil }
+        f.model.set(.oneWindowAtATime, enabled: false)
+        try require(f.model.displayedEnabled(.stageManager) == false &&
+            f.model.displayedEnabled(.oneWindowAtATime) == false,
+            "Queued focus exit did not show both controls turning off")
+        f.backend.releaseRead()
+        try await until { !f.model.busy && !f.model.refreshing }
+        try require(f.backend.values[.stageManager] == false &&
+            f.model.states[.stageManager]?.enabled == false,
+            "Checkbox exit left Stage Manager enabled")
+        try require(f.model.profiles.first?.settings.values[.stageManager] == false,
+            "Profile autosave retained Stage Manager on after focus exit")
+        f.model.restoreAll()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.stageManager] == true,
+            "Restore All lost the originally enabled Stage Manager")
+        try require(f.model.profiles.first?.settings.values[.stageManager] == false,
+            "Restoration overwrote the saved focus-off profile")
+    }
+
+    @MainActor private static func testOneWindowShortcutExit() async throws {
+        let f = Fixture(); defer { f.close() }
+        f.backend.values[.stageManager] = true
+        try await f.start()
+        f.model.shortcuts.onAction?(.oneWindow)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.oneWindowAtATime] == true, "Shortcut did not enter one-window focus")
+        f.model.shortcuts.onAction?(.oneWindow)
+        try await until { !f.model.busy }
+        try require(f.backend.values[.stageManager] == false && f.backend.values[.oneWindowAtATime] == false,
+            "Shortcut exit left other apps hidden by Stage Manager")
+        f.model.restoreAll()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.stageManager] == true, "Shortcut exit discarded the original Stage Manager baseline")
     }
 
     @MainActor private static func testOneWindowStageFailureReadback() async throws {

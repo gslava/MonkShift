@@ -72,14 +72,18 @@ actor PreferencesWorker {
             return FeatureState(enabled: (value(windowManager, "AutoHide") as? NSNumber)?.boolValue ?? false,
                 detail: "Takes effect while Stage Manager is on.")
         case .oneWindowAtATime:
+            let stage = try read(.stageManager)
+            let detail = "Automatically enables Stage Manager and Hide recent apps. Turning this mode off or choosing dimming stops Stage Manager. Restore All restores the original settings."
+            guard stage.available, stage.enabled == true else {
+                return FeatureState(enabled: false, detail: stage.detail ?? detail, available: stage.available)
+            }
             guard let number = value(windowManager, "AppWindowGroupingBehavior") as? NSNumber,
                   let grouping = WindowGrouping(rawValue: number.intValue),
                   number.doubleValue == Double(grouping.rawValue) else {
                 return FeatureState(enabled: nil,
                     detail: "The window grouping setting is missing or unsupported. Choose “Show windows from an application” in System Settings → Desktop & Dock, then Refresh.")
             }
-            return FeatureState(enabled: grouping != .allWindows,
-                detail: "Automatically enables Stage Manager and Hide recent apps. Turning this mode off or choosing dimming restores both previous states.")
+            return FeatureState(enabled: grouping != .allWindows, detail: detail)
         case .hideDesktopItems:
             let keys = keys(feature)!.1
             let hidden = try keys.map { key -> Bool in

@@ -1,29 +1,35 @@
-## Fixes since v0.1.4
+## Fixes since v0.1.5
 
-**Version 0.1.5 · Build 6**
+**Version 0.1.6 · Build 7**
 
-- Fix **Show windows one at a time** switching in the wrong direction. Enabling
-  now selects the native single-window mode; disabling selects all windows.
-- Read both native single-window variants correctly. Missing or unsupported
-  grouping values show **Unknown** instead of an incorrect checkbox state.
-- Keep background dimming available when Stage Manager is off, regardless of its
-  stored grouping preference. Unknown active grouping pauses dimming safely.
-- Preserve original grouping values, absent preference keys and Stage Manager /
-  Hide recent apps baselines for restoration. Existing profiles and restore files
-  remain compatible.
-
-## Documentation
-
-The README is shorter, with detailed guides under `docs/`. Installation now
-includes the macOS first-launch warning and the **Open Anyway** instructions.
+- Turning off **Show windows one at a time** now stops Stage Manager, revealing
+  windows from other apps even when Stage Manager was already enabled before
+  entering focus. Selecting background dimming also exits Stage Manager.
+- **Restore All** still restores the original Stage Manager state. Recent-apps
+  visibility returns to its saved state, and existing restore records remain
+  compatible. Shutdown failures retain recoverable records and report an error.
+- The one-window checkbox now reports off while Stage Manager is off. Window,
+  menu bar and shortcut actions share the same exit behavior; profile autosave
+  records the resulting Stage Manager state.
 
 ## Verification
 
-156 automated checks passed locally on macOS 15.8.1 (Apple Silicon), including
-six new preferences-adapter checks for grouping direction, native values,
-rejected writes, restoration and focus-mode dependencies. Checks use isolated
-preferences and fake system clients; they do not change macOS settings.
-Live visual effects on macOS 14 and Intel Macs remain manual checks.
+163 automated checks passed on macOS 15.8.1 (Apple Silicon), including new cases
+for pre-existing/external Stage Manager, failure and restart recovery, profile
+saving, queued checkbox input and shortcuts.
+
+The opt-in live focus-exit check also passed on that Mac: Stage Manager turned
+off and the number of apps with visible windows increased from 5 to 9. The three
+original settings were restored exactly. Re-run intentionally with overlapping
+windows from multiple apps:
+
+```sh
+bash scripts/check-focus-live.sh --allow-system-changes
+```
+
+That manual check is separate from the automated suite and never runs in CI.
+macOS 14, Intel Macs and other display/Space configurations still require live
+verification.
 
 ## Installation
 

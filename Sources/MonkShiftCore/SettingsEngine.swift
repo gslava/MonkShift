@@ -37,6 +37,12 @@ import Foundation
     private func setValue(_ feature: Feature, enabled: Bool, intensity: Double) async throws {
         var next = journal
         var affected = enabled ? [feature] + (feature.alternativeFocusMode.map { [$0] } ?? []) : [feature]
+        // Leaving one-window focus must also reveal windows belonging to other
+        // apps. Preserve Stage Manager before stopping it, even for an externally
+        // enabled mode with no saved focus-cycle metadata.
+        if (feature == .oneWindowAtATime && !enabled) || (feature == .dimBackground && enabled) {
+            affected.append(.stageManager)
+        }
         if hasMonkSession && next.monkFocusBaseline == nil {
             next.monkFocusBaseline = .init(stageManagerBeforeOneWindow: journal.stageManagerBeforeOneWindow,
                 hideRecentAppsBeforeOneWindow: journal.hideRecentAppsBeforeOneWindow)
@@ -69,7 +75,7 @@ import Foundation
                     try await requireOneWindowPrerequisites()
                 }
                 try await backend.disable(alternative)
-                if feature == .dimBackground { try await restoreOneWindowPrerequisites() }
+                if feature == .dimBackground { try await restoreOneWindowPrerequisites(stoppingStageManager: true) }
             }
             try await backend.apply(feature, intensity: intensity)
         } else if let snapshot = journal.monk[feature.rawValue] ?? journal.individual[feature.rawValue] {
@@ -77,14 +83,16 @@ import Foundation
             // A checkbox must turn the feature off even if it was already on before MonkShift.
             // Keep the original snapshot until Restore All so the exact baseline remains recoverable.
             let restoredEnabled = try await backend.read(feature).enabled
-            if restoredEnabled == true || (feature == .oneWindowAtATime && restoredEnabled == nil) {
+            if feature == .oneWindowAtATime || restoredEnabled == true {
                 try await backend.disable(feature)
             }
             try await backend.finishChanges()
         } else {
             try await backend.disable(feature)
         }
-        if feature == .oneWindowAtATime && !enabled { try await restoreOneWindowPrerequisites() }
+        if feature == .oneWindowAtATime && !enabled {
+            try await restoreOneWindowPrerequisites(stoppingStageManager: true)
+        }
     }
 
     public func applyProfile(_ settings: ProfileSettings) async throws -> [OperationIssue] {
@@ -146,12 +154,27 @@ import Foundation
         }
     }
 
-    private func restoreOneWindowPrerequisites() async throws {
+    private func restoreOneWindowPrerequisites(stoppingStageManager: Bool = false) async throws {
         for feature in [Feature.stageManager, .hideRecentApps] {
             let snapshot = feature == .stageManager ? journal.stageManagerBeforeOneWindow : journal.hideRecentAppsBeforeOneWindow
-            guard let snapshot else { continue }
-            try await backend.restore(feature, from: snapshot)
+            if feature == .stageManager && stoppingStageManager {
+                if try await backend.read(feature).enabled != false {
+                    guard snapshot != nil || journal.individual[feature.rawValue] != nil || journal.monk[feature.rawValue] != nil else {
+                        throw MonkError("Could not save Stage Manager before stopping it. Its current state was left unchanged.")
+                    }
+                    try await backend.disable(feature)
+                }
+                guard try await backend.read(feature).enabled == false else {
+                    throw MonkError("Stage Manager is still enabled. Windows from other apps may remain hidden; retry turning off one-window mode.")
+                }
+            } else {
+                guard let snapshot else { continue }
+                try await backend.restore(feature, from: snapshot)
+            }
             try await backend.finishChanges()
+            // The original state remains in individual/Monk snapshots for
+            // Restore All. Clear cycle metadata only after confirmed success.
+            guard snapshot != nil else { continue }
             var next = journal
             if feature == .stageManager { next.stageManagerBeforeOneWindow = nil }
             else { next.hideRecentAppsBeforeOneWindow = nil }
@@ -214,7 +237,7 @@ import Foundation
                         try await requireOneWindowPrerequisites()
                     }
                     try await backend.disable(alternative)
-                    if feature == .dimBackground { try await restoreOneWindowPrerequisites() }
+                    if feature == .dimBackground { try await restoreOneWindowPrerequisites(stoppingStageManager: true) }
                 }
                 try await backend.apply(feature, intensity: feature == .dimBackground ? dimmingIntensity : intensity)
             }

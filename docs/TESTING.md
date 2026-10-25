@@ -102,7 +102,7 @@ The build scripts do not launch MonkShift or change system settings. Real permis
 The automated dimming checks use fake Accessibility, tracking, rendering and settings clients; they do not prove live ordering or resource usage. Before shipping:
 
 - Start the packaged app intentionally; verify Accessibility is requested only when missing and denial leaves Automation-backed controls usable. Grant/revoke it and Refresh; verify dimming hides/resumes correctly.
-- Test all four initial combinations of Stage Manager and Hide recent apps. Enable **Show windows one at a time** in the window and menu, and verify both settings turn on and the recent-apps strip is hidden. Turn the mode off or switch to dimming and verify both settings return to their respective earlier states. Check repeated enables, a second cycle after changing either setting, restart recovery, unavailable prerequisites and retry after a failed restoration. Only one focus mode may be enabled; Monk Mode must follow the last choice after both are turned off and after restarting. An earlier individual focus cycle must still restore both prerequisite baselines after entering and restoring Monk Mode.
+- Test all four initial combinations of Stage Manager and Hide recent apps. Enable **Show windows one at a time** in the window and menu, and verify both settings turn on and the recent-apps strip is hidden. Turn the mode off or switch to dimming and verify Stage Manager turns off and windows from other apps become visible, including when Stage Manager was initially on. Recent-apps visibility must return to its earlier state. Restore All must still recover both original settings. Check repeated enables, a second cycle after changing either setting, restart recovery, unavailable prerequisites and retry after a failed restoration. Only one focus mode may be enabled; Monk Mode must follow the last choice after both are turned off and after restarting. An earlier individual focus cycle must still restore both prerequisite baselines after entering and restoring Monk Mode.
 - Switch between windows of the same app and different apps, including Safari, Finder, AppKit and Electron apps. Check sheets, menus, floating palettes, close/minimize and an app with no windows. Ambiguous focus, disappearance of the anchor and switching to a different regular app without a valid window must remove the overlay. Temporarily missing AX focus may retain an already identified normal window that is still on screen in the same app or behind an accessory menu. Closing/minimizing the anchor, Space/display changes, permission loss and disabling dimming clear it.
 - Open MonkShift's menu, File/Edit menus, third-party menu bar utilities (including Stats) and system menus (including Wi-Fi and Control Center); leave each open for several seconds, enter submenus and dismiss with Escape or an outside click. Reopen the same menu and alternate between different menus at least six times without clicking the document between them. Dimming must remain at the chosen intensity below the last document window, with menus above it, including when the host sends no menu notification or temporarily cannot answer AX requests. Accessory popups without a native close control, including normal-level custom NSWindows, must not replace the document anchor; an actual closable settings window may become the new anchor. Open a new window from a menu and verify reanchoring without a flash. Close/minimize the retained document and verify no orphan layer remains. Verify each utility live; fake checks do not establish OS compatibility.
 - Exercise Stage Manager groups, Mission Control, Spaces, full screen, Reduce Motion, multiple displays with separate Spaces, display hot-plug and mixed scaling. Check clicks and drag-and-drop pass through without focus theft. No compatibility claim is established until these checks pass on each supported macOS version.
@@ -112,3 +112,27 @@ The automated dimming checks use fake Accessibility, tracking, rendering and set
 ## Resource measurements
 
 No fixed RAM claim is made until the release build is measured. To measure, launch the release app, grant permission, close the window, let it idle, then inspect **Memory** for MonkShift in Activity Monitor. Compare open-window and closed-window states, dimming off/on, and one versus multiple displays. Also measure WindowServer memory/CPU and GPU activity: compositing costs may be charged outside MonkShift. Include stationary windows, repeated focus switching, window dragging and background video; no numeric performance claim is verified yet. Shared framework pages and OS caches mean RSS and Activity Monitor's memory figure differ.
+
+
+## Opt-in live focus-exit check
+
+Open windows from at least two apps, then run intentionally:
+
+```sh
+bash scripts/check-focus-live.sh --allow-system-changes
+```
+
+This manual check uses the real settings engine and preferences adapter. It
+enters one-window focus, exits it, verifies that Stage Manager is off and that
+additional application windows are visible through public WindowServer metadata.
+It reads no window titles or screen pixels. It operates on a private copy of the
+restore journal, saves the three original preferences before mutation, and
+restores them on completion. A recovery backup is retained under `build/`;
+the wrapper also attempts restoration if the check fails or is interrupted.
+It is never run by `check.sh` or CI and refuses to run without the opt-in flag.
+
+Live verification on 2026-10-25, macOS 15.8.1 (Apple Silicon): the opt-in check
+passed with the production engine/preferences adapter. Stage Manager and the
+one-window checkbox were off after exit, visible app owners increased from 5
+to 9, and the three original preferences were restored exactly. This result does
+not establish compatibility with other macOS versions or display configurations.

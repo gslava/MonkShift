@@ -119,7 +119,9 @@ Menu control fixtures, shown separately from the surrounding native menu.
 
 **Show windows one at a time** and **Dim background windows** are mutually
 exclusive. One-window mode also enables **Stage Manager** and **Hide recent
-apps**; disabling it or switching to dimming restores both earlier states.
+apps**. Disabling it or switching to dimming turns **Stage Manager off**,
+revealing windows from other apps, and restores recent-apps visibility.
+**Restore All** can recover the original Stage Manager state.
 Turning both modes off retains the last choice for the next Monk Mode session.
 
 Dimming has a separate **0–90%** slider, defaulting to **50%**, in the window and

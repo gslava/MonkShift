@@ -21,7 +21,9 @@ public struct ProfileSettings: Codable, Equatable, Sendable {
         if result.values[.oneWindowAtATime] == true {
             result.focusMode = .oneWindowAtATime
             result.values[.stageManager] = true
-            result.values[.hideRecentApps] = true
+            // Default new one-window profiles to hidden recent apps, but retain
+            // an explicit choice saved through the independent checkbox.
+            if result.values[.hideRecentApps] == nil { result.values[.hideRecentApps] = true }
         } else if result.values[.dimBackground] == true {
             result.focusMode = .dimBackground
         }

@@ -41,6 +41,7 @@ func require(_ condition: Bool, _ message: String) throws {
             ("Window grouping restores exact values and absence", WindowGroupingChecks.testExactRestoration),
             ("One-window dimming conflicts require Stage Manager", WindowGroupingChecks.testActiveModeRequiresStageManager),
             ("Focus cycles preserve native grouping and prerequisite baselines", { try await WindowGroupingChecks.testFocusCycleAndRestoreAll() }),
+            ("One-window profiles retain explicit native recent-app visibility", { try await WindowGroupingChecks.testProfilePreservesRecentAppsChoice() }),
             ("Desktop visibility reports complete and mixed states", DesktopVisibilityChecks.testObservedVisibility),
             ("Desktop visibility restores exact preference values and absence", DesktopVisibilityChecks.testExactPreferenceRestoration),
             ("Desktop visibility can show icons and widgets in both modes", DesktopVisibilityChecks.testDisableShowsBothModes),

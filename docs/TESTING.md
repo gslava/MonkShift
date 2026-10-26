@@ -53,6 +53,13 @@ reads and both slider editors, and preservation of profiles and restore files.
 The cross-process check requires access to the user's preferences service and can
 be blocked by a filesystem sandbox; it does not write real macOS settings.
 
+Profile checks also cover unavailable disabled settings (including failed reads),
+required snapshots for enabled/unknown settings and focus dependencies, and
+restoration after skipping unsupported controls. Window and menu dimming sliders
+are checked while off, queued on/off, enabled and after Accessibility loss.
+Recent-app visibility is checked across profile reapplication, switching,
+restart and restoration, including the real preferences adapter with fake storage.
+
 Automated checks do not establish live menu compatibility or CPU/RAM usage.
 
 Window-grouping checks exercise the real preferences adapter with in-memory
@@ -96,6 +103,8 @@ The build scripts do not launch MonkShift or change system settings. Real permis
 - Change checkboxes and both intensities, then switch between profiles from the window and menu bar. Verify the target settings and focus mode apply immediately and both interfaces show the same selection. Repeat quickly while changes are pending.
 - Restart and verify names, selection and saved configurations survive without automatically applying a profile. Restore All after multiple switches, including switches inside Monk Mode, and verify the original settings return while profiles remain saved.
 - Revoke Accessibility before selecting a dimming profile. Verify the current focus mode is preserved, the error is visible, and selecting the same profile after restoring permission retries successfully.
+- Enable one-window mode, uncheck **Hide recent apps**, then reselect the profile, switch away and back, and restart. Recent apps must stay visible when the profile is reapplied. Restore All must recover the original settings.
+- Select a profile with an unavailable setting saved as off. Other supported settings must apply; the unavailable setting must remain untouched. A failed snapshot of a setting that will be changed must still prevent mutations.
 
 ## Background dimming manual checks
 
@@ -106,7 +115,7 @@ The automated dimming checks use fake Accessibility, tracking, rendering and set
 - Switch between windows of the same app and different apps, including Safari, Finder, AppKit and Electron apps. Check sheets, menus, floating palettes, close/minimize and an app with no windows. Ambiguous focus, disappearance of the anchor and switching to a different regular app without a valid window must remove the overlay. Temporarily missing AX focus may retain an already identified normal window that is still on screen in the same app or behind an accessory menu. Closing/minimizing the anchor, Space/display changes, permission loss and disabling dimming clear it.
 - Open MonkShift's menu, File/Edit menus, third-party menu bar utilities (including Stats) and system menus (including Wi-Fi and Control Center); leave each open for several seconds, enter submenus and dismiss with Escape or an outside click. Reopen the same menu and alternate between different menus at least six times without clicking the document between them. Dimming must remain at the chosen intensity below the last document window, with menus above it, including when the host sends no menu notification or temporarily cannot answer AX requests. Accessory popups without a native close control, including normal-level custom NSWindows, must not replace the document anchor; an actual closable settings window may become the new anchor. Open a new window from a menu and verify reanchoring without a flash. Close/minimize the retained document and verify no orphan layer remains. Verify each utility live; fake checks do not establish OS compatibility.
 - Exercise Stage Manager groups, Mission Control, Spaces, full screen, Reduce Motion, multiple displays with separate Spaces, display hot-plug and mixed scaling. Check clicks and drag-and-drop pass through without focus theft. No compatibility claim is established until these checks pass on each supported macOS version.
-- Verify 0%, 50% and 90%, independent grayscale/dimming sliders, rapid switching, exact restoration, failed restore retry, and exit/relaunch behavior.
+- Verify the window and menu dimming sliders are disabled while background dimming is off and enabled while it is on. Check 0%, 50% and 90%, independent grayscale/dimming sliders, rapid switching, exact restoration, failed restore retry, and exit/relaunch behavior.
 - Measure release-build MonkShift and WindowServer CPU/RAM plus GPU activity with dimming off/on, both idle and during focus changes, dragging and background video. Record hardware, macOS version, display resolution/scaling and display count.
 
 ## Resource measurements

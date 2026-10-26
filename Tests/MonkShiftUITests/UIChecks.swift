@@ -30,6 +30,8 @@ private func require(_ condition: Bool, _ message: String) throws {
     var changes: [String] = []
     var intensities: [Double] = []
     var failFeature: Feature?
+    var unavailable: Set<Feature> = []
+    var failSnapshot: Set<Feature> = []
     var failRestoreFeature: Feature?
     var holdRead = false
     var holdApply = false
@@ -49,7 +51,7 @@ private func require(_ condition: Bool, _ message: String) throws {
             holdRead = false
             await withCheckedContinuation { blockedRead = $0 }
         }
-        return FeatureState(enabled: values[feature])
+        return FeatureState(enabled: values[feature], available: !unavailable.contains(feature))
     }
     func intensity() async throws -> Double {
         if holdIntensity {
@@ -59,7 +61,10 @@ private func require(_ condition: Bool, _ message: String) throws {
         return amount
     }
     func dimmingIntensity() -> Double { dimmingAmount }
-    func snapshot(_ feature: Feature) async throws -> Data { try JSONEncoder().encode(values[feature]!) }
+    func snapshot(_ feature: Feature) async throws -> Data {
+        if failSnapshot.contains(feature) { throw MonkError("Fixture snapshot unavailable") }
+        return try JSONEncoder().encode(values[feature]!)
+    }
     func apply(_ feature: Feature, intensity: Double) async throws {
         let journal = try FileRestoreStore(url: directory.appendingPathComponent("restore.json")).load()
         try require(journal.individual[feature.rawValue] != nil || journal.monk[feature.rawValue] != nil,
@@ -173,6 +178,8 @@ private func require(_ condition: Bool, _ message: String) throws {
             ("Profile storage failure prevents selection and preserves existing data", testProfileStorageFailure),
             ("Corrupt profiles preserve restoration and are not replaced", testCorruptProfiles),
             ("Denied profile dimming preserves the current mode and retries", testProfileAccessibilityRevocation),
+            ("Profiles skip unavailable disabled settings and remain restorable", testProfileUnavailableDisabledSetting),
+            ("Recent-app visibility survives profile reapplication, switching and restart", testProfileRecentAppsChoice),
             ("New focus shortcuts preserve legacy bindings and route through the queue", testFocusShortcuts),
             ("Focus handoff retains the layer until its new anchor is ready", DimmingChecks.testFocusHandoffKeepsTheLayerVisible),
             ("Menus retain the layer and allow new window focus", DimmingChecks.testMenuKeepsLayerAndAcceptsNewWindow),
@@ -205,6 +212,7 @@ private func require(_ condition: Bool, _ message: String) throws {
             ("One-window shortcut stops pre-existing Stage Manager", testOneWindowShortcutExit),
             ("Failed automatic Stage Manager input rolls back displayed state", testOneWindowStageFailureReadback),
             ("Dimming menu slider is independent and limited to 90 percent", testDimmingMenu),
+            ("Window and menu dimming sliders require an enabled effect", testDimmingSliderAvailability),
             ("Startup asks for Accessibility once without blocking other features", testAccessibilityStartup),
             ("Revoked Accessibility blocks queued dimming without disabling the other mode", testQueuedAccessibilityRevocation),
             ("Refresh keeps controls stable and queues new input", testRefreshQueuesInput),
@@ -592,6 +600,63 @@ private func require(_ condition: Bool, _ message: String) throws {
             "A failed profile could not be reapplied after permission recovery")
     }
 
+    @MainActor private static func testProfileUnavailableDisabledSetting() async throws {
+        let store = FakeProfileStore()
+        var values = Dictionary(uniqueKeysWithValues: Feature.allCases.map { ($0, false) })
+        values[.hideDock] = true
+        store.library = ProfileLibrary(settings: ProfileSettings(values: values,
+            intensity: 0.5, dimmingIntensity: 0.5, focusMode: .oneWindowAtATime))
+        let f = Fixture(profileStore: store); defer { f.close() }
+        f.backend.unavailable = [.grayscale]
+        f.backend.failSnapshot = [.grayscale]
+        try await f.start()
+        f.model.selectProfile(id: "default")
+        try await until { !f.model.busy }
+        try require(f.backend.values[.hideDock] == true && f.model.issues.isEmpty && f.model.generalError == nil,
+            "An unavailable disabled filter blocked unrelated profile changes")
+        let journal = try FileRestoreStore(url: f.directory.appendingPathComponent("restore.json")).load()
+        try require(journal.individual[Feature.grayscale.rawValue] == nil,
+            "A skipped unavailable setting acquired a restore record")
+        f.model.restoreAll()
+        try await until { !f.model.busy }
+        try require(f.backend.values[.hideDock] == false && f.model.issues.isEmpty,
+            "Skipping an unavailable disabled setting blocked restoration")
+    }
+
+    @MainActor private static func testProfileRecentAppsChoice() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        f.model.set(.oneWindowAtATime, enabled: true)
+        try await until { !f.model.busy }
+        f.model.set(.hideRecentApps, enabled: false)
+        try await until { !f.model.busy }
+        try require(f.model.profiles[0].settings.values[.hideRecentApps] == false,
+            "The manual recent-app choice was not saved")
+        f.model.selectProfile(id: "default")
+        try await until { !f.model.busy }
+        try require(f.backend.values[.oneWindowAtATime] == true && f.backend.values[.hideRecentApps] == false,
+            "Reapplying the profile overrode its saved recent-app choice")
+        try f.model.createProfile(name: "Other")
+        f.model.set(.oneWindowAtATime, enabled: false)
+        try await until { !f.model.busy }
+        f.model.selectProfile(id: "default")
+        try await until { !f.model.busy }
+        try require(f.backend.values[.oneWindowAtATime] == true && f.backend.values[.hideRecentApps] == false,
+            "Switching profiles overrode recent-app visibility")
+        let restarted = f.restartedModel()
+        defer { restarted.shortcuts.shutdown(); restarted.shutdown() }
+        restarted.refresh()
+        try await until { !restarted.refreshing }
+        restarted.selectProfile(id: "default")
+        try await until { !restarted.busy }
+        try require(f.backend.values[.stageManager] == true && f.backend.values[.oneWindowAtATime] == true &&
+            f.backend.values[.hideRecentApps] == false && restarted.issues.isEmpty,
+            "A restarted profile lost the saved recent-app choice")
+        restarted.restoreAll()
+        try await until { !restarted.busy }
+        try require(f.backend.values.values.allSatisfy { !$0 }, "Profile reapplication lost the original restore baseline")
+    }
+
     @MainActor private static func testFocusChoicePersistence() async throws {
         let f = Fixture(); defer { f.close() }
         try await f.start()
@@ -771,7 +836,34 @@ private func require(_ condition: Bool, _ message: String) throws {
         f.accessibility.allowed = true
         f.model.refresh()
         try await until { !f.model.refreshing }
-        try require(f.model.canAdjustDimmingIntensity, "Accessibility grant did not unlock dimming controls")
+        try require(f.model.states[.dimBackground]?.available == true && !f.model.canAdjustDimmingIntensity,
+            "Accessibility grant enabled the slider while dimming remained off")
+    }
+
+    @MainActor private static func testDimmingSliderAvailability() async throws {
+        let f = Fixture(); defer { f.close() }
+        try await f.start()
+        try require(!f.model.canAdjustDimmingIntensity && !f.model.canAdjustMenuDimmingIntensity,
+            "Dimming sliders are enabled while the effect is off")
+        f.backend.holdApply = true
+        f.model.set(.dimBackground, enabled: true)
+        try await until { f.backend.blockedApply != nil }
+        try require(f.model.canAdjustDimmingIntensity && f.model.canAdjustMenuDimmingIntensity,
+            "A queued enable did not unlock the dimming sliders")
+        f.backend.releaseApply()
+        try await until { !f.model.busy }
+        try require(f.model.canAdjustDimmingIntensity, "Enabled dimming did not unlock its slider")
+        f.model.set(.dimBackground, enabled: false)
+        try require(!f.model.canAdjustDimmingIntensity && !f.model.canAdjustMenuDimmingIntensity,
+            "A queued disable left the dimming sliders enabled")
+        try await until { !f.model.busy }
+        f.model.set(.dimBackground, enabled: true)
+        try await until { !f.model.busy }
+        f.accessibility.allowed = false
+        f.model.refresh()
+        try await until { !f.model.refreshing }
+        try require(!f.model.canAdjustDimmingIntensity && !f.model.canAdjustMenuDimmingIntensity,
+            "Accessibility loss left the dimming sliders enabled")
     }
 
     @MainActor private static func testQueuedAccessibilityRevocation() async throws {

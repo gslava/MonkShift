@@ -11,7 +11,10 @@ import MonkShiftCore
         let oneWindow = settings([.oneWindowAtATime], mode: .dimBackground).normalized
         await expectEqual(oneWindow.focusMode, .oneWindowAtATime)
         await expectEqual(oneWindow.values[.stageManager], true)
-        await expectEqual(oneWindow.values[.hideRecentApps], true)
+        await expectEqual(oneWindow.values[.hideRecentApps], false)
+        var implicitRecentApps = settings([.oneWindowAtATime])
+        implicitRecentApps.values.removeValue(forKey: .hideRecentApps)
+        await expectEqual(implicitRecentApps.normalized.values[.hideRecentApps], true)
         let both = settings([.oneWindowAtATime, .dimBackground], mode: .dimBackground).normalized
         await expectEqual(both.values[.oneWindowAtATime], false)
         await expectEqual(both.values[.dimBackground], true)
@@ -67,7 +70,7 @@ import MonkShiftCore
                 await expectEqual(store.journal.individual[feature.rawValue], backend.initial)
             }
         }
-        await expectTrue(try await engine.applyProfile(settings([.oneWindowAtATime, .grayscale])).isEmpty)
+        await expectTrue(try await engine.applyProfile(settings([.oneWindowAtATime, .hideRecentApps, .grayscale])).isEmpty)
         await expectEqual(backend.values[.stageManager], backend.applied)
         await expectEqual(backend.values[.hideRecentApps], backend.applied)
         await expectEqual(backend.intensities[.grayscale], 0.7)
@@ -78,7 +81,7 @@ import MonkShiftCore
         await expectEqual(backend.values[.hideRecentApps], backend.initial)
         await expectEqual(backend.intensities[.dimBackground], 0.65)
         await expectEqual(store.journal.individual, baseline)
-        await expectTrue(try await engine.applyProfile(settings([.oneWindowAtATime, .grayscale])).isEmpty)
+        await expectTrue(try await engine.applyProfile(settings([.oneWindowAtATime, .hideRecentApps, .grayscale])).isEmpty)
         await expectEqual(store.journal.individual, baseline)
         await expectTrue(try await engine.restoreIndividual().isEmpty)
         for feature in Feature.allCases { await expectEqual(backend.values[feature], backend.initial) }
@@ -92,6 +95,70 @@ import MonkShiftCore
             let engine = try SettingsEngine(backend: backend, store: store)
             await expectThrows(try await engine.applyProfile(settings([.hideDock, .oneWindowAtATime])))
             await expectEqual(backend.writes, 0)
+        }
+    }
+
+    func testDisabledUnavailableSettingsDoNotBlockProfile() async throws {
+        for feature in [Feature.grayscale, .reduceMotion, .hideDesktopItems] {
+            for readThrows in [false, true] {
+                let backend = FakeBackend(), store = MemoryStore()
+                backend.unavailable = [feature]
+                backend.failSnapshot = [feature]
+                if readThrows { backend.failRead = [feature] }
+                let engine = try SettingsEngine(backend: backend, store: store)
+                await expectTrue(try await engine.applyProfile(settings([.hideDock])).isEmpty)
+                await expectEqual(try backend.read(.hideDock).enabled, true)
+                await expectEqual(store.journal.individual[feature.rawValue], nil)
+                await expectFalse(backend.events.contains("apply:\(feature.rawValue)"))
+                await expectFalse(backend.events.contains("disable:\(feature.rawValue)"))
+                await expectTrue(try await engine.restoreIndividual().isEmpty)
+                await expectEqual(try backend.read(.hideDock).enabled, false)
+            }
+        }
+    }
+
+    func testOneWindowProfilePreservesExplicitRecentAppsChoice() async throws {
+        for originallyHidden in [false, true] {
+            let backend = FakeBackend(), store = MemoryStore()
+            if originallyHidden { backend.values[.hideRecentApps] = backend.applied }
+            let original = originallyHidden ? backend.applied : backend.initial
+            let engine = try SettingsEngine(backend: backend, store: store)
+            let profile = settings([.oneWindowAtATime])
+            for _ in 0..<2 {
+                await expectTrue(try await engine.applyProfile(profile).isEmpty)
+                await expectEqual(try backend.read(.oneWindowAtATime).enabled, true)
+                await expectEqual(try backend.read(.stageManager).enabled, true)
+                await expectEqual(try backend.read(.hideRecentApps).enabled, false)
+                await expectEqual(store.journal.individual[Feature.hideRecentApps.rawValue], original)
+            }
+            await expectTrue(try await engine.restoreIndividual().isEmpty)
+            await expectEqual(backend.values[.hideRecentApps], original)
+        }
+    }
+
+    func testEnabledOrUnknownSettingsStillRequireSnapshots() async throws {
+        for enabled in [false, true] {
+            let backend = FakeBackend(), store = MemoryStore()
+            backend.failSnapshot = [.grayscale]
+            if enabled { backend.unavailable = [.grayscale] }
+            else { backend.unknown = [.grayscale] }
+            let engine = try SettingsEngine(backend: backend, store: store)
+            await expectThrows(try await engine.applyProfile(settings(enabled ? [.hideDock, .grayscale] : [.hideDock])))
+            await expectEqual(backend.writes, 0)
+            await expectEqual(store.journal, RestoreJournal())
+        }
+    }
+
+    func testUnavailableFocusDependenciesStillRequireSnapshots() async throws {
+        for (mode, dependency) in [(Feature.oneWindowAtATime, Feature.dimBackground), (.dimBackground, .stageManager)] {
+            let backend = FakeBackend(), store = MemoryStore()
+            backend.values[mode.alternativeFocusMode!] = backend.applied
+            backend.unavailable = [dependency]
+            backend.failSnapshot = [dependency]
+            let engine = try SettingsEngine(backend: backend, store: store)
+            await expectThrows(try await engine.applyProfile(settings([mode], mode: mode)))
+            await expectEqual(backend.writes, 0)
+            await expectEqual(store.journal, RestoreJournal())
         }
     }
 

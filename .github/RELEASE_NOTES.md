@@ -1,35 +1,29 @@
-## Fixes since v0.1.5
+## Fixes since v0.1.6
 
-**Version 0.1.6 · Build 7**
+**Version 0.1.7 · Build 8**
 
-- Turning off **Show windows one at a time** now stops Stage Manager, revealing
-  windows from other apps even when Stage Manager was already enabled before
-  entering focus. Selecting background dimming also exits Stage Manager.
-- **Restore All** still restores the original Stage Manager state. Recent-apps
-  visibility returns to its saved state, and existing restore records remain
-  compatible. Shutdown failures retain recoverable records and report an error.
-- The one-window checkbox now reports off while Stage Manager is off. Window,
-  menu bar and shortcut actions share the same exit behavior; profile autosave
-  records the resulting Stage Manager state.
+- The background dimming slider is now disabled in both the window and menu
+  while **Dim background windows** is off. Enable the effect before adjusting
+  its intensity.
+- One-window profiles retain an explicitly saved **Hide recent apps** choice
+  when reapplied, switched or reopened after restart. Stage Manager remains
+  enabled, and profiles without a saved recent-app choice still default to
+  hiding recent apps.
+- Unavailable settings saved as off no longer block unrelated profile changes.
+  Settings that a focus transition needs to change still require durable
+  snapshots before any mutation. Original restore baselines remain recoverable.
 
 ## Verification
 
-163 automated checks passed on macOS 15.8.1 (Apple Silicon), including new cases
-for pre-existing/external Stage Manager, failure and restart recovery, profile
-saving, queued checkbox input and shortcuts.
+171 automated checks passed on macOS 15.8.1 (Apple Silicon): 63 core,
+8 permission, 23 system and 77 UI/intent/observation checks. New regression
+coverage includes slider availability, profile round trips and restart,
+unavailable/failed reads, required snapshot failures and restoration.
 
-The opt-in live focus-exit check also passed on that Mac: Stage Manager turned
-off and the number of apps with visible windows increased from 5 to 9. The three
-original settings were restored exactly. Re-run intentionally with overlapping
-windows from multiple apps:
-
-```sh
-bash scripts/check-focus-live.sh --allow-system-changes
-```
-
-That manual check is separate from the automated suite and never runs in CI.
-macOS 14, Intel Macs and other display/Space configurations still require live
-verification.
+Light/dark fixture previews were inspected. Automated checks use fake settings
+and do not change macOS preferences or request permissions. Live visual behavior
+on macOS 14, Intel Macs and other display/Space configurations remains a separate
+manual verification step.
 
 ## Installation
 

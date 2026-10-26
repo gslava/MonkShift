@@ -104,9 +104,21 @@ import Foundation
         var targets = settings.values
         if targets[.oneWindowAtATime] == true { targets[.dimBackground] = false }
         if targets[.dimBackground] == true { targets[.oneWindowAtATime] = false }
+        // Focus transitions still need durable snapshots of settings they may
+        // change, even when the profile leaves those dependencies disabled.
+        let focusDependencies: Set<Feature> = targets[.oneWindowAtATime] == true ?
+            [.stageManager, .hideRecentApps, .dimBackground] :
+            targets[.dimBackground] == true ? [.stageManager, .oneWindowAtATime] : []
         // Capture the complete group before the first mutation, retaining any
         // earlier individual or Monk baseline across every profile switch.
         for feature in Feature.allCases where targets[feature] != nil {
+            if targets[feature] == false && !focusDependencies.contains(feature) {
+                let state = try? await backend.read(feature)
+                if state?.available != true {
+                    targets.removeValue(forKey: feature)
+                    continue
+                }
+            }
             if next.individual[feature.rawValue] == nil && next.monk[feature.rawValue] == nil {
                 next.individual[feature.rawValue] = try await backend.snapshot(feature)
             }

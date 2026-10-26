@@ -119,7 +119,8 @@ import MonkShiftCore
     }
     var canAdjustMenuIntensity: Bool { canAdjustIntensity && displayedEnabled(.grayscale) == true }
     var canAdjustDimmingIntensity: Bool {
-        canChange && accessibility.granted && states[.dimBackground]?.available == true
+        canChange && accessibility.granted && states[.dimBackground]?.available == true &&
+            displayedEnabled(.dimBackground) == true
     }
     var canAdjustMenuDimmingIntensity: Bool { canAdjustDimmingIntensity && displayedEnabled(.dimBackground) == true }
 

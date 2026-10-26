@@ -16,6 +16,7 @@ import MonkShiftCore
 @MainActor final class FakeBackend: SettingsBackend {
     var values: [Feature: Data] = [:]
     var unavailable: Set<Feature> = []
+    var failRead: Set<Feature> = []
     var unknown: Set<Feature> = []
     var ignoredApply: Set<Feature> = []
     var failApply: Set<Feature> = []
@@ -32,7 +33,8 @@ import MonkShiftCore
     let initial = Data("original".utf8)
     let applied = Data("on".utf8)
     func read(_ feature: Feature) throws -> FeatureState {
-        FeatureState(enabled: unknown.contains(feature) ? nil : values[feature] == applied,
+        if failRead.contains(feature) { throw MonkError("Read unavailable") }
+        return FeatureState(enabled: unknown.contains(feature) ? nil : values[feature] == applied,
             detail: "Unavailable", available: !unavailable.contains(feature))
     }
     func snapshot(_ feature: Feature) async throws -> Data {

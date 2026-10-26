@@ -168,4 +168,28 @@ enum WindowGroupingChecks {
             }
         }
     }
+
+    @MainActor static func testProfilePreservesRecentAppsChoice() async throws {
+        for hidden in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("GroupingProfile-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let original: [String: Any] = [key: 1, "GloballyEnabled": false, "AutoHide": hidden]
+            let preferences = GroupingPreferences(original)
+            let backend = GroupingBackend(preferences.worker())
+            let store = FileRestoreStore(url: directory.appendingPathComponent("restore.json"))
+            let engine = try SettingsEngine(backend: backend, store: store)
+            let profile = ProfileSettings(values: [.oneWindowAtATime: true, .hideRecentApps: false],
+                intensity: 0.5, dimmingIntensity: 0.5, focusMode: .oneWindowAtATime)
+            for _ in 0..<2 {
+                try require(try await engine.applyProfile(profile).isEmpty, "One-window profile failed")
+                try require(try await backend.read(.oneWindowAtATime).enabled == true &&
+                    preferences.contents()["AutoHide"] as? Bool == false,
+                    "A one-window profile overrode the explicit recent-app visibility")
+            }
+            let restarted = try SettingsEngine(backend: backend, store: store)
+            try require(try await restarted.restoreIndividual().isEmpty, "Profile restoration failed after restart")
+            try require((preferences.contents() as NSDictionary).isEqual(to: original),
+                "Profile reapplication lost the native grouping or prerequisite baseline")
+        }
+    }
 }

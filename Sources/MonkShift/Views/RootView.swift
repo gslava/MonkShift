@@ -232,7 +232,7 @@ struct DimmingControlsView: View {
                 if !editing { model.commitDimmingIntensity() }
             }
             .disabled(!model.canAdjustDimmingIntensity)
-            .help("0–90%. Applied when you release the slider. Background dimming stops when MonkShift quits.")
+            .help("Enable background dimming to adjust its intensity. 0–90%, applied when you release the slider. Background dimming stops when MonkShift quits.")
             HStack {
                 if !accessibility.granted {
                     Button("Allow Accessibility…") { accessibility.request(); model.refresh() }

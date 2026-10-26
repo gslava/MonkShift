@@ -125,8 +125,7 @@ revealing windows from other apps, and restores recent-apps visibility.
 Turning both modes off retains the last choice for the next Monk Mode session.
 
 Dimming has a separate **0–90%** slider, defaulting to **50%**, in the window and
-menu bar. Like grayscale, its menu slider requires the effect to be on; the
-window can save a preferred amount while it is off. At 0% no dimming layer is
+menu bar. Both dimming sliders require the effect to be on. At 0% no dimming layer is
 drawn. The effect does not intercept clicks or keyboard input. Menus and floating
 palettes can remain above it. It pauses when the active window cannot be
 identified safely, Accessibility is lost or one-window mode is enabled externally.

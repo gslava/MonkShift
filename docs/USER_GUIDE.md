@@ -86,7 +86,7 @@ remain readable. Failed shutdowns retain their restore records for retry; they
 are not reported as successful. If a prerequisite cannot be enabled, the previous
 focus mode is left unchanged and the error is reported.
 
-Background dimming has its own **0–90%** slider in the window and directly below its native menu checkbox, defaulting to 50%. It is independent of grayscale. Menu adjustment requires dimming to be enabled; the window can save an intensity while it is off. Dimming at 0% draws no layer. The overlay does not intercept mouse or keyboard input and has no blur or animation. One reusable window per connected display is positioned below the focused window; windows above that layer, such as floating palettes and menus, remain visible.
+Background dimming has its own **0–90%** slider in the window and directly below its native menu checkbox, defaulting to 50%. It is independent of grayscale. Both sliders are disabled until background dimming is enabled. Dimming at 0% draws no layer. The overlay does not intercept mouse or keyboard input and has no blur or animation. One reusable window per connected display is positioned below the focused window; windows above that layer, such as floating palettes and menus, remain visible.
 
 The effect pauses when the active window cannot be identified unambiguously, ordering fails, or one-window mode is enabled externally. Accessibility loss hides the layer and stops tracking when detected at the next focus/refresh event. Settings changed outside MonkShift are rechecked on those events or with Refresh; there is no repeating check. Unsupported/ambiguous windows remain undimmed. The implementation uses only normal-level windows and matches public window metadata by process and frame; exact matches between overlapping same-sized windows are deliberately not guessed. Mission Control, full-screen transitions and Stage Manager animation behavior still require live validation.
 
@@ -156,7 +156,10 @@ shared across profiles.
 Profile switches use the same serialized queue as individual controls. All target
 settings are saved for restoration before the first mutation, and later switches
 retain those original baselines. One-window profiles also enable Stage Manager
-and Hide recent apps. Errors remain visible and a failed profile can be selected
+and preserve an explicitly saved **Hide recent apps** choice. When that choice
+is absent, recent apps are hidden by default. Unavailable settings saved as off
+are skipped unless a focus transition needs to change them; required snapshots
+must still be saved before any mutation. Errors remain visible and a failed profile can be selected
 again to retry. **Restore All** restores the pre-change state without erasing
 saved profiles. Profiles selected inside a Monk session preserve that session's
 baseline; the Monk Mode button retains its existing enable-all/restore behavior.
